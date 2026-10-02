@@ -33,7 +33,6 @@
   .status{font-size:12px;color:var(--muted);margin-top:6px;min-height:1.2em}
   .status.ok{color:var(--ok)}
   .credit{text-align:center;color:var(--muted);font-size:12px;margin-top:32px}
-  .lines{display:flex;gap:16px;margin-top:8px;font-size:14px}
   .pdfrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;font-size:13px;color:var(--muted)}
   .pick{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   @media (max-width:520px){.pick{grid-template-columns:1fr}}
@@ -47,12 +46,12 @@
   .pdfbox{position:absolute;pointer-events:none;border-radius:2px}
   .pdfbox.sel{border:2px solid var(--accent);background:rgba(37,99,235,.12)}
   .pdfbox.found{border:2px solid var(--ok);background:rgba(21,128,61,.12)}
-  .lines label{display:flex;gap:6px;align-items:center;cursor:pointer}
   .shot{border:2px dashed var(--line);border-radius:10px;padding:16px;font-size:15px;color:var(--muted);outline:none;min-height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center;cursor:pointer}
   .shot b{color:var(--ink)}
   .shot:focus,.shot.drag,.pdfdrop.drag{border-color:var(--accent)}
   .shotstage{margin-top:8px;overflow:auto;max-height:80vh;border:1px solid var(--line);border-radius:8px;background:#fff}
-  .shotstage img{display:block;max-width:100%;height:auto}
+  .shotstage img{display:block;max-width:100%;height:auto;cursor:zoom-in}
+  .lens{position:fixed;z-index:10;width:420px;height:180px;border:2px solid var(--accent);border-radius:8px;background:#fff no-repeat;box-shadow:0 6px 24px rgba(0,0,0,.35);pointer-events:none}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   code{background:var(--bg);padding:1px 5px;border-radius:4px}
 </style>
@@ -86,6 +85,7 @@
         <h2>צילום המסך <span class="row"><button id="shotClear">הסרת צילום המסך</button></span></h2>
         <div id="shotStatus" class="status"></div>
         <div class="shotstage"><img id="shotImg" alt="צילום המסך שהודבק"></div>
+        <div id="lens" class="lens" hidden></div>
       </section>
       <section id="pdfView" class="pdfview" hidden aria-label="תצוגת PDF">
         <h2><bdi id="pdfName" dir="ltr">PDF</bdi>
@@ -107,16 +107,12 @@
     <div class="card">
       <h2>טקסט מתוקן <span class="row"><button id="copy" class="primary">העתקה</button></span></h2>
       <div id="out" class="out" dir="rtl" contenteditable="plaintext-only" spellcheck="false" role="textbox" aria-multiline="true" aria-label="טקסט מתוקן, ניתן לעריכה"></div>
-      <div class="lines" role="radiogroup" aria-label="שורות">
-        <label><input type="radio" name="lines" value="paras" checked> פסקאות ותבליטים</label>
-        <label><input type="radio" name="lines" value="one"> הכול בשורה אחת</label>
-      </div>
       <div class="legend" id="legend" hidden><span class="unsure">מילים באדום</span>: לא אומתו מול צילום המסך או שהזיהוי שלהן לא ודאי. כדאי לבדוק אותן. אפשר לערוך את הטקסט כאן לפני ההעתקה.</div>
       <div class="status" id="copystatus"></div>
     </div>
   </div>
 
-  <footer class="credit" dir="ltr">Created by Dr. Tom Rabinowitz @ Tel Aviv Sourasky University Medical Center</footer>
+  <footer class="credit" dir="ltr">Created by Dr. Tom Rabinowitz @ Dana-Dwek Children's Hospital, Tel Aviv Sourasky University Medical Center</footer>
 </main>
 
 <script id="core">
@@ -1193,16 +1189,12 @@
   const $ = id => document.getElementById(id);
   const outEl=$('out'), cs=$('copystatus'), st=$('shotStatus');
   let ocr = null, shotFile = null, busy = false;
-  const oneLine = () => document.querySelector('input[name=lines]:checked').value === 'one';
-  let rawOut = '', rawMarks = [], plain = '';
   const esc = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   // show the text, colouring the words to check; the words are found in order so a repeated word is marked only where it was flagged
   function setOut(t, marks){
-    edited = false;
-    rawOut = t; rawMarks = marks || [];
-    plain = oneLine() ? t.replace(/\s*\n\s*/g, ' ') : t;
+    const plain = t;
     let html = '', pos = 0;
-    for (const m of rawMarks){
+    for (const m of marks || []){
       let at = plain.indexOf(m, pos);
       while (at >= 0 && ((at > 0 && /\S/.test(plain[at-1]) && !/[("'\-]/.test(plain[at-1])) || (at + m.length < plain.length && /[\u05D0-\u05EAA-Za-z0-9]/.test(plain[at + m.length])))) at = plain.indexOf(m, at + 1);
       if (at < 0) continue;
@@ -1211,13 +1203,7 @@
     outEl.innerHTML = html + esc(plain.slice(pos));
     $('legend').hidden = !outEl.querySelector('.unsure');
   }
-  let edited = false;
-  outEl.addEventListener('input', () => { edited = true; cs.textContent = ''; });
-  document.querySelectorAll('input[name=lines]').forEach(r => r.addEventListener('change', () => {
-    if (!edited) return setOut(rawOut, rawMarks);
-    // keep the user's edits: only change the line breaks
-    const t = outEl.innerText; outEl.textContent = oneLine() ? t.replace(/\s*\n\s*/g, ' ') : t;
-  }));
+  outEl.addEventListener('input', () => { cs.textContent = ''; });
   // copying a selection gives plain text, never the red colour
   outEl.addEventListener('copy', e => { e.preventDefault(); e.clipboardData.setData('text/plain', String(window.getSelection())); });
   function note(msg, ok){ st.textContent = msg; st.className = 'status' + (ok ? ' ok' : ''); }
@@ -1338,6 +1324,21 @@
   shot.addEventListener('dragover', e => { e.preventDefault(); shot.classList.add('drag'); });
   shot.addEventListener('dragleave', () => shot.classList.remove('drag'));
   shot.addEventListener('drop', e => { e.preventDefault(); shot.classList.remove('drag'); const f = [...e.dataTransfer.files].find(f => f.type.startsWith('image/')); if (f) useImage(f); });
+  // hovering over the screenshot shows the area under the pointer enlarged
+  { const img = $('shotImg'), lens = $('lens');
+    img.addEventListener('mousemove', e => {
+      const r = img.getBoundingClientRect(), W = lens.offsetWidth || 420, H = lens.offsetHeight || 180;
+      const z = Math.max(2, img.naturalWidth / r.width);   // at least twice the shown size, and never smaller than the original
+      const x = (e.clientX - r.left) * z, y = (e.clientY - r.top) * z;
+      lens.style.backgroundImage = 'url("' + img.src + '")';
+      lens.style.backgroundSize = (r.width * z) + 'px ' + (r.height * z) + 'px';
+      lens.style.backgroundPosition = (W/2 - x) + 'px ' + (H/2 - y) + 'px';
+      const left = Math.min(Math.max(8, e.clientX - W/2), window.innerWidth - W - 8);
+      const top = e.clientY + 24 + H < window.innerHeight ? e.clientY + 24 : e.clientY - H - 24;
+      lens.style.left = left + 'px'; lens.style.top = top + 'px'; lens.hidden = false;
+    });
+    img.addEventListener('mouseleave', () => { lens.hidden = true; });
+  }
   $('shotClear').addEventListener('click', () => { ocr = null; shotFile = null; $('shotView').hidden = true; if (!pdf) $('pick').hidden = false; note(''); run(); });
   $('copy').addEventListener('click', async ()=>{
     const current = outEl.innerText.replace(/\n$/, '');

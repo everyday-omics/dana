@@ -18,4 +18,4 @@ Everything runs inside the browser on your computer. Nothing is uploaded or save
 - [Tesseract.js](https://github.com/naptha/tesseract.js) with the Hebrew and English `best_int` models, embedded in the file (Apache License 2.0)
 - [pdf.js](https://github.com/mozilla/pdf.js) by Mozilla, embedded in the file (Apache License 2.0)
 
-Created by Dr. Tom Rabinowitz @ Tel Aviv Sourasky University Medical Center
+Created by Dr. Tom Rabinowitz @ Dana-Dwek Children's Hospital, Tel Aviv Sourasky University Medical Center
