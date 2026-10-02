@@ -1,4 +1,4 @@
-# pdfcopy
+# PDF Copy
 
 Fixes scrambled Hebrew and English text copied from PDF files, such as clinical summaries viewed in Acrobat.
 
