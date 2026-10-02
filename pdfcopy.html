@@ -40,7 +40,7 @@
   .pick{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   @media (max-width:520px){.pick{grid-template-columns:1fr}}
   .pick .shot{min-height:200px}
-  .pdfdrop .why{font-size:13px;line-height:1.6;margin:0;padding:0 18px 0 0;text-align:right}
+  .pick .why{font-size:13px;line-height:1.6;margin:0;padding:0 18px 0 0;text-align:right}
   .pdfview h2{flex-wrap:wrap;gap:6px}
   #pdfName{text-transform:none;letter-spacing:0}
   .pdfpage{font-size:13px;color:var(--muted);min-width:90px;text-align:center}
@@ -71,6 +71,7 @@
         <div class="pick">
           <div id="shot" class="shot" tabindex="0" aria-label="אזור הדבקת צילום מסך">
             <div id="shotHint"><b>צילום מסך</b><br>העתיקו צילום מסך של הפסקה (ע"י Win+Shift+S),<br>ואז הדביקו כאן עם Ctrl+V.</div>
+            <ul class="why"><li>צילום מסך גדול ובאיכות טובה (למשל בזום מוגדל) משפר את הדיוק.</li></ul>
           </div>
           <div id="pdfDrop" class="shot pdfdrop" tabindex="0" aria-label="טעינת קובץ PDF">
             <div><b>קובץ PDF</b><br>גררו לכאן את קובץ ה-PDF</div>
