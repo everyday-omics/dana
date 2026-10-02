@@ -49,7 +49,7 @@
   .pdfpg{position:relative;margin:0 auto;background:#fff}
   .pdfpg + .pdfpg{border-top:6px solid var(--line)}
   .pdfbox{position:absolute;pointer-events:none;border-radius:2px}
-  .pdfbox .del{position:absolute;top:3px;right:3px;width:22px;height:22px;padding:0;border-radius:11px;border:none;background:var(--accent);color:#fff;font-size:14px;line-height:22px;text-align:center;cursor:pointer;pointer-events:auto}
+  .pdfbox .del{position:absolute;top:3px;left:3px;width:22px;height:22px;padding:0;border-radius:11px;border:none;background:var(--accent);color:#fff;font-size:14px;line-height:22px;text-align:center;cursor:pointer;pointer-events:auto}
   .pdfbox .del:hover{background:var(--bad)}
   .pdfbox.sel{border:2px solid var(--accent);background:rgba(37,99,235,.12)}
   .shot{border:2px dashed var(--line);border-radius:10px;padding:16px;font-size:15px;color:var(--muted);outline:none;min-height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center;cursor:pointer}
@@ -57,6 +57,11 @@
   .shot:focus,.shot.drag,.pdfdrop.drag{border-color:var(--accent)}
   .shotstage{margin-top:8px;overflow:auto;max-height:80vh;border:1px solid var(--line);border-radius:8px;background:#fff}
   .shotstage img{display:block;max-width:100%;height:auto;cursor:zoom-in}
+  .shotitem{position:relative}
+  .shotitem + .shotitem{border-top:6px solid var(--line)}
+  .shotitem.reading img{opacity:.55}
+  .shotitem .del{position:absolute;top:4px;left:4px;width:24px;height:24px;padding:0;border-radius:12px;border:none;background:var(--accent);color:#fff;font-size:14px;line-height:24px;text-align:center;cursor:pointer}
+  .shotitem .del:hover{background:var(--bad)}
   .lens{position:fixed;z-index:10;left:50%;top:50%;transform:translate(-50%,-50%);border:2px solid var(--accent);border-radius:8px;background:#fff;box-shadow:0 0 0 100vmax rgba(0,0,0,.45),0 8px 32px rgba(0,0,0,.4);cursor:zoom-out}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   code{background:var(--bg);padding:1px 5px;border-radius:4px}
@@ -89,9 +94,10 @@
         <div id="pickStatus" class="status"></div>
       </div>
       <section id="shotView" hidden aria-label="צילום המסך">
-        <h2>צילום המסך <span class="row"><button id="shotClear">הסרת צילום המסך</button></span></h2>
+        <h2>צילומי מסך <span class="row"><button id="shotClear">הסרת הכול</button></span></h2>
         <div id="shotStatus" class="status"></div>
-        <div class="shotstage"><img id="shotImg" alt="צילום המסך שהודבק"></div>
+        <div id="shotList" class="shotstage"></div>
+        <div class="status">אפשר להדביק צילומי מסך נוספים (Ctrl+V). הטקסט שלהם יתווסף לפי הסדר.</div>
         <img id="lens" class="lens" alt="" hidden>
       </section>
       <section id="pdfView" class="pdfview" hidden aria-label="תצוגת PDF">
@@ -1188,7 +1194,7 @@
 (function(){
   const $ = id => document.getElementById(id);
   const outEl=$('out'), st=$('shotStatus');
-  let ocr = null, shotFile = null, busy = false;
+  let shots = [];   // the pasted screenshots in order: {file, url, el, ocr, err}
   const esc = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   // show the text, colouring the words to check; the words are found in order so a repeated word is marked only where it was flagged
   function setOut(t, marks){
@@ -1221,27 +1227,43 @@
       } else { setOut(''); pdfNote('סמנו בגרירה את החלקים שתרצו לחלץ. לחיצה על ✕ מבטלת סימון.'); }
       return;
     }
-    if (!ocr){ setOut(''); return; }
-    if (!ocr.hebParas && shotFile && !busy){
-      busy = true; note('קורא את צילום המסך…');
-      try { await BidiOCR.addHebOnly(ocr, p => note('קורא את צילום המסך… ' + Math.round(p*100) + '%')); } catch(e) {}
-      busy = false;
-    }
-    if (!ocr) return;
-    const r = BidiFix.fromOcr(ocr.paras, ocr.hebParas);
-    setOut(r.text, r.marks);
-    note('נקרא מצילום המסך. בדקו את הכתיב ואת המונחים באנגלית, כי אותיות עלולות להיקרא לא נכון. טעינת קובץ ה-PDF תיתן תוצאה מדויקת יותר.');
+    // the screenshots, each read on its own; their texts in the order they were pasted, an empty line between them
+    if (!shots.length){ setOut(''); return; }
+    const done = shots.filter(x => x.ocr), reading = shots.filter(x => !x.ocr && !x.err).length;
+    const parts = [], marks = [];
+    for (const x of done){ const r = BidiFix.fromOcr(x.ocr.paras, x.ocr.hebParas); if (r.text.trim()){ parts.push(r.text.trim()); marks.push(...(r.marks || [])); } }
+    setOut(parts.join('\n\n'), marks);
+    if (reading) return;   // the progress is shown while reading
+    const failed = shots.find(x => x.err);
+    note(failed ? 'לא ניתן לקרוא את צילום המסך: ' + failed.err : 'נקרא מ' + (shots.length > 1 ? 'צילומי' : 'צילום') + ' המסך. בדקו את הכתיב ואת המונחים באנגלית, כי אותיות עלולות להיקרא לא נכון. טעינת קובץ ה-PDF תיתן תוצאה מדויקת יותר.');
   }
-  async function useImage(file){
+  // reads waiting screenshots one at a time, in the order they were pasted (each reading already uses several cores)
+  let reader = null;
+  function readNext(){
+    if (reader) return;
+    const x = shots.find(y => !y.ocr && !y.err); if (!x) return;
+    // "screenshot 2 of 3", counted when shown, since more may be pasted meanwhile
+    const of = () => shots.length > 1 ? ' ' + (shots.indexOf(x) + 1) + ' מתוך ' + shots.length : '';
+    note('קורא את צילום המסך' + of() + '…' + (BidiOCR.started ? '' : ' (בפעם הראשונה זה לוקח כמה שניות)'));
+    reader = BidiOCR.read(x.file, p => note('קורא את צילום המסך' + of() + '… ' + Math.round(p*100) + '%'), true)
+      .then(r => { x.ocr = r; }, e => { x.err = e && e.message ? e.message : String(e); })
+      .then(() => { reader = null; x.el.classList.remove('reading'); if (shots.includes(x)) run(); readNext(); });
+  }
+  function useImage(file){
     if (pdf) closePdf();
-    shotFile = file; ocr = null;
-    if ($('shotImg').src) URL.revokeObjectURL($('shotImg').src);
-    $('shotImg').src = URL.createObjectURL(file); $('pick').hidden = true; $('shotView').hidden = false; $('pickStatus').textContent = '';
-    note('קורא את צילום המסך… (בפעם הראשונה זה לוקח כמה שניות)');
-    busy = true;
-    try { ocr = await BidiOCR.read(file, p => note('קורא את צילום המסך… ' + Math.round(p*100) + '%'), true); }
-    catch(e){ note('לא ניתן לקרוא את צילום המסך: ' + (e && e.message ? e.message : String(e))); }
-    busy = false;
+    const x = {file, url: URL.createObjectURL(file), ocr: null, err: null};
+    x.el = document.createElement('div'); x.el.className = 'shotitem reading';
+    x.el.innerHTML = '<img alt="צילום מסך שהודבק"><button class="del" title="הסרת צילום המסך" aria-label="הסרת צילום המסך">✕</button>';
+    x.el.querySelector('img').src = x.url;
+    x.el.querySelector('.del').addEventListener('click', () => removeShot(x));
+    $('shotList').appendChild(x.el); shots.push(x);
+    $('pick').hidden = true; $('shotView').hidden = false; $('pickStatus').textContent = '';
+    x.el.scrollIntoView({block: 'nearest'});
+    readNext();
+  }
+  function removeShot(x){
+    shots.splice(shots.indexOf(x), 1); x.el.remove(); URL.revokeObjectURL(x.url);
+    if (!shots.length){ $('shotView').hidden = true; if (!pdf) $('pick').hidden = false; note(''); }
     run();
   }
   // ---- PDF: load, show pages, mark an area
@@ -1293,7 +1315,7 @@
   function closePdf(){ if (pdf && pdf.io) pdf.io.disconnect(); pdf = null; $('pdfStage').innerHTML = ''; $('pdfView').hidden = true; $('pick').hidden = false; }
   async function loadPdf(file){
     $('pickStatus').textContent = '';
-    if (shotFile) $('shotClear').click();
+    if (shots.length) $('shotClear').click();
     $('pick').hidden = true; $('pdfView').hidden = false; pdfNote('פותח את ה-PDF…');
     try {
       const doc = await BidiPDF.open(file);
@@ -1358,17 +1380,18 @@
   shot.addEventListener('dragover', e => { e.preventDefault(); shot.classList.add('drag'); });
   shot.addEventListener('dragleave', () => shot.classList.remove('drag'));
   shot.addEventListener('drop', e => { e.preventDefault(); shot.classList.remove('drag'); const f = [...e.dataTransfer.files].find(f => f.type.startsWith('image/')); if (f) useImage(f); });
-  // clicking the screenshot shows all of it enlarged, as large as the window allows; a click or Esc closes it
-  { const img = $('shotImg'), lens = $('lens');
-    img.addEventListener('click', () => {
+  // clicking a screenshot shows all of it enlarged, as large as the window allows; a click or Esc closes it
+  { const lens = $('lens');
+    $('shotList').addEventListener('click', e => {
+      const img = e.target.tagName === 'IMG' ? e.target : null; if (!img) return;
       const w = img.naturalWidth, h = img.naturalHeight; if (!w || !h) return;
       const z = Math.min(window.innerWidth * 0.95 / w, window.innerHeight * 0.92 / h, 3);
       lens.src = img.src; lens.style.width = Math.round(w * z) + 'px'; lens.style.height = Math.round(h * z) + 'px'; lens.hidden = false;
     });
-    document.addEventListener('click', e => { if (!lens.hidden && e.target !== img) lens.hidden = true; }, true);
+    document.addEventListener('click', e => { if (!lens.hidden && !(e.target.tagName === 'IMG' && e.target.closest('#shotList'))) lens.hidden = true; }, true);
     document.addEventListener('keydown', e => { if (e.key === 'Escape') lens.hidden = true; });
   }
-  $('shotClear').addEventListener('click', () => { ocr = null; shotFile = null; $('shotView').hidden = true; if (!pdf) $('pick').hidden = false; note(''); run(); });
+  $('shotClear').addEventListener('click', () => { shots.forEach(x => URL.revokeObjectURL(x.url)); shots = []; $('shotList').innerHTML = ''; $('shotView').hidden = true; if (!pdf) $('pick').hidden = false; note(''); run(); });
   let copiedT = null;
   $('copy').addEventListener('click', async ()=>{
     const current = outEl.innerText.replace(/\n$/, '');
@@ -1541,6 +1564,7 @@ window.BidiOCR = (function(){
     return [big, c];
   }
   async function read(file, onProgress, withHebOnly){
+    api.started = true;
     const canvases = await prepare(file);
     // one progress figure for all readings together, never going backwards
     const prog = [], n = canvases.length * (withHebOnly ? 2 : 1); let shown = 0;
@@ -1563,7 +1587,8 @@ window.BidiOCR = (function(){
     res.hebParas = toParas(r2.data);
     return res;
   }
-  return {read, addHebOnly};
+  const api = {read, addHebOnly, started: false};
+  return api;
 })();
 </script>
 </body>
