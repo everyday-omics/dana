@@ -51,7 +51,7 @@
   .shot:focus,.shot.drag,.pdfdrop.drag{border-color:var(--accent)}
   .shotstage{margin-top:8px;overflow:auto;max-height:80vh;border:1px solid var(--line);border-radius:8px;background:#fff}
   .shotstage img{display:block;max-width:100%;height:auto;cursor:zoom-in}
-  .lens{position:fixed;z-index:10;width:420px;height:180px;border:2px solid var(--accent);border-radius:8px;background:#fff no-repeat;box-shadow:0 6px 24px rgba(0,0,0,.35);pointer-events:none}
+  .lens{position:fixed;z-index:10;left:50%;top:50%;transform:translate(-50%,-50%);border:2px solid var(--accent);border-radius:8px;background:#fff;box-shadow:0 8px 32px rgba(0,0,0,.4);pointer-events:none}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   code{background:var(--bg);padding:1px 5px;border-radius:4px}
 </style>
@@ -85,7 +85,7 @@
         <h2>צילום המסך <span class="row"><button id="shotClear">הסרת צילום המסך</button></span></h2>
         <div id="shotStatus" class="status"></div>
         <div class="shotstage"><img id="shotImg" alt="צילום המסך שהודבק"></div>
-        <div id="lens" class="lens" hidden></div>
+        <img id="lens" class="lens" alt="" hidden>
       </section>
       <section id="pdfView" class="pdfview" hidden aria-label="תצוגת PDF">
         <h2><bdi id="pdfName" dir="ltr">PDF</bdi>
@@ -1324,18 +1324,13 @@
   shot.addEventListener('dragover', e => { e.preventDefault(); shot.classList.add('drag'); });
   shot.addEventListener('dragleave', () => shot.classList.remove('drag'));
   shot.addEventListener('drop', e => { e.preventDefault(); shot.classList.remove('drag'); const f = [...e.dataTransfer.files].find(f => f.type.startsWith('image/')); if (f) useImage(f); });
-  // hovering over the screenshot shows the area under the pointer enlarged
+  // hovering over the screenshot shows all of it enlarged, as large as the window allows
   { const img = $('shotImg'), lens = $('lens');
-    img.addEventListener('mousemove', e => {
-      const r = img.getBoundingClientRect(), W = lens.offsetWidth || 420, H = lens.offsetHeight || 180;
-      const z = Math.max(2, img.naturalWidth / r.width);   // at least twice the shown size, and never smaller than the original
-      const x = (e.clientX - r.left) * z, y = (e.clientY - r.top) * z;
-      lens.style.backgroundImage = 'url("' + img.src + '")';
-      lens.style.backgroundSize = (r.width * z) + 'px ' + (r.height * z) + 'px';
-      lens.style.backgroundPosition = (W/2 - x) + 'px ' + (H/2 - y) + 'px';
-      const left = Math.min(Math.max(8, e.clientX - W/2), window.innerWidth - W - 8);
-      const top = e.clientY + 24 + H < window.innerHeight ? e.clientY + 24 : e.clientY - H - 24;
-      lens.style.left = left + 'px'; lens.style.top = top + 'px'; lens.hidden = false;
+    img.addEventListener('mouseenter', () => {
+      const w = img.naturalWidth, h = img.naturalHeight; if (!w || !h) return;
+      const z = Math.min(window.innerWidth * 0.95 / w, window.innerHeight * 0.92 / h, 3);
+      if (z * w <= img.getBoundingClientRect().width * 1.1) return;   // the shown screenshot is already this large
+      lens.src = img.src; lens.style.width = Math.round(w * z) + 'px'; lens.style.height = Math.round(h * z) + 'px'; lens.hidden = false;
     });
     img.addEventListener('mouseleave', () => { lens.hidden = true; });
   }
