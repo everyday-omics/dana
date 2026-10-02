@@ -1,8 +1,8 @@
-# BidiFix
+# pdfcopy
 
 Fixes scrambled Hebrew and English text copied from PDF files, such as clinical summaries viewed in Acrobat.
 
-Open `bidifix.html` in a browser (Edge or Chrome), then either:
+Open `pdfcopy.html` in a browser (Edge or Chrome), then either:
 
 - **Paste a screenshot** of the paragraph (Win+Shift+S, then Ctrl+V). The text is read with built-in optical character recognition.
 - **Load or drag the PDF file**, then mark the area you want. The text is read directly from the file, so this is the most accurate option.
