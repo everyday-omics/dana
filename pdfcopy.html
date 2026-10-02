@@ -51,7 +51,8 @@
   .shot{border:2px dashed var(--line);border-radius:10px;padding:16px;font-size:15px;color:var(--muted);outline:none;min-height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center;cursor:pointer}
   .shot b{color:var(--ink)}
   .shot:focus,.shot.drag,.pdfdrop.drag{border-color:var(--accent)}
-  .shot img{max-width:100%;max-height:180px;display:block;border-radius:4px}
+  .shotstage{margin-top:8px;overflow:auto;max-height:80vh;border:1px solid var(--line);border-radius:8px;background:#fff}
+  .shotstage img{display:block;max-width:100%;height:auto}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   code{background:var(--bg);padding:1px 5px;border-radius:4px}
 </style>
@@ -68,9 +69,6 @@
         <div class="pick">
           <div id="shot" class="shot" tabindex="0" aria-label="אזור הדבקת צילום מסך">
             <div id="shotHint"><b>צילום מסך</b><br>העתיקו צילום מסך של הפסקה (ע"י Win+Shift+S),<br>ואז הדביקו כאן עם Ctrl+V.</div>
-            <img id="shotImg" alt="צילום המסך שהודבק" hidden>
-            <div id="shotStatus" class="status"></div>
-            <button id="shotClear" hidden>הסרת צילום המסך</button>
           </div>
           <div id="pdfDrop" class="shot pdfdrop" tabindex="0" aria-label="טעינת קובץ PDF">
             <div><b>קובץ PDF</b><br>גררו לכאן את קובץ ה-PDF</div>
@@ -82,7 +80,13 @@
             <input type="file" id="pdfFile" accept="application/pdf,.pdf" hidden>
           </div>
         </div>
+        <div id="pickStatus" class="status"></div>
       </div>
+      <section id="shotView" hidden aria-label="צילום המסך">
+        <h2>צילום המסך <span class="row"><button id="shotClear">הסרת צילום המסך</button></span></h2>
+        <div id="shotStatus" class="status"></div>
+        <div class="shotstage"><img id="shotImg" alt="צילום המסך שהודבק"></div>
+      </section>
       <section id="pdfView" class="pdfview" hidden aria-label="תצוגת PDF">
         <h2><bdi id="pdfName" dir="ltr">PDF</bdi>
           <span class="row">
@@ -1242,7 +1246,8 @@
   async function useImage(file){
     if (pdf) closePdf();
     shotFile = file; ocr = null;
-    $('shotImg').src = URL.createObjectURL(file); $('shotImg').hidden = false; $('shotHint').hidden = true; $('shotClear').hidden = false;
+    if ($('shotImg').src) URL.revokeObjectURL($('shotImg').src);
+    $('shotImg').src = URL.createObjectURL(file); $('pick').hidden = true; $('shotView').hidden = false; $('pickStatus').textContent = '';
     note('קורא את צילום המסך… (בפעם הראשונה זה לוקח כמה שניות)');
     busy = true;
     try { ocr = await BidiOCR.read(file, p => note('קורא את צילום המסך… ' + Math.round(p*100) + '%'), true); }
@@ -1281,6 +1286,7 @@
   // the PDF view takes the whole input card; the screenshot is set aside
   function closePdf(){ pdf = null; $('pdfView').hidden = true; $('pick').hidden = false; }
   async function loadPdf(file){
+    $('pickStatus').textContent = '';
     if (shotFile) $('shotClear').click();
     $('pick').hidden = true; $('pdfView').hidden = false; pdfNote('פותח את ה-PDF…');
     try {
@@ -1290,7 +1296,7 @@
       await showPdfPage(1);
       pdfNote('סמנו בגרירה אזור בעמוד כדי לחלץ ממנו את הטקסט.');
       run();
-    } catch(e){ pdf = null; $('pick').hidden = false; $('pdfView').hidden = true; note('לא ניתן לפתוח את הקובץ: ' + (e && e.message ? e.message : String(e))); }
+    } catch(e){ pdf = null; $('pick').hidden = false; $('pdfView').hidden = true; $('pickStatus').textContent = ('לא ניתן לפתוח את הקובץ: ' + (e && e.message ? e.message : String(e))); }
   }
   $('pdfOpen').addEventListener('click', () => $('pdfFile').click());
   $('pdfFile').addEventListener('change', e => { const f = e.target.files[0]; if (f) loadPdf(f); e.target.value = ''; });
@@ -1328,11 +1334,11 @@
     if (item){ e.preventDefault(); useImage(item.getAsFile()); }
   });
   const shot = $('shot');
-  shot.addEventListener('click', e => { if (e.target.id !== 'shotClear') shot.focus(); });
+  shot.addEventListener('click', () => shot.focus());
   shot.addEventListener('dragover', e => { e.preventDefault(); shot.classList.add('drag'); });
   shot.addEventListener('dragleave', () => shot.classList.remove('drag'));
   shot.addEventListener('drop', e => { e.preventDefault(); shot.classList.remove('drag'); const f = [...e.dataTransfer.files].find(f => f.type.startsWith('image/')); if (f) useImage(f); });
-  $('shotClear').addEventListener('click', () => { ocr = null; shotFile = null; $('shotImg').hidden = true; $('shotHint').hidden = false; $('shotClear').hidden = true; note(''); run(); });
+  $('shotClear').addEventListener('click', () => { ocr = null; shotFile = null; $('shotView').hidden = true; if (!pdf) $('pick').hidden = false; note(''); run(); });
   $('copy').addEventListener('click', async ()=>{
     const current = outEl.innerText.replace(/\n$/, '');
     try{ await navigator.clipboard.writeText(current); }
