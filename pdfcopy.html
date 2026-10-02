@@ -46,9 +46,10 @@
   .pdfpage{font-size:13px;color:var(--muted);min-width:90px;text-align:center}
   .pdfstage{position:relative;margin-top:8px;overflow:auto;max-height:80vh;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:crosshair;touch-action:none}
   .pdfstage canvas{display:block}
+  .pdfpg{position:relative;margin:0 auto;background:#fff}
+  .pdfpg + .pdfpg{border-top:6px solid var(--line)}
   .pdfbox{position:absolute;pointer-events:none;border-radius:2px}
   .pdfbox.sel{border:2px solid var(--accent);background:rgba(37,99,235,.12)}
-  .pdfbox.found{border:2px solid var(--ok);background:rgba(21,128,61,.12)}
   .shot{border:2px dashed var(--line);border-radius:10px;padding:16px;font-size:15px;color:var(--muted);outline:none;min-height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center;cursor:pointer}
   .shot b{color:var(--ink)}
   .shot:focus,.shot.drag,.pdfdrop.drag{border-color:var(--accent)}
@@ -71,7 +72,7 @@
         <div class="pick">
           <div id="shot" class="shot" tabindex="0" aria-label="אזור הדבקת צילום מסך">
             <div id="shotHint"><b>צילום מסך</b><br>העתיקו צילום מסך של הפסקה (ע"י Win+Shift+S),<br>ואז הדביקו כאן עם Ctrl+V.</div>
-            <ul class="why"><li>צילום מסך גדול ובאיכות טובה (למשל בזום מוגדל) משפר את הדיוק.</li></ul>
+            <ul class="why"><li>צלמו את הפסקה בלבד, בלי חלקים מסביב.</li></ul>
           </div>
           <div id="pdfDrop" class="shot pdfdrop" tabindex="0" aria-label="טעינת קובץ PDF">
             <div><b>קובץ PDF</b><br>גררו לכאן את קובץ ה-PDF</div>
@@ -94,18 +95,13 @@
       <section id="pdfView" class="pdfview" hidden aria-label="תצוגת PDF">
         <h2><bdi id="pdfName" dir="ltr">PDF</bdi>
           <span class="row">
-            <button id="pdfPrev" aria-label="העמוד הקודם">הקודם</button>
             <span id="pdfPage" class="pdfpage"></span>
-            <button id="pdfNext" aria-label="העמוד הבא">הבא</button>
             <button id="pdfClear">הסרת ה-PDF</button>
           </span>
         </h2>
         <div id="pdfStatus" class="status">סמנו בגרירה אזור בעמוד כדי לחלץ ממנו את הטקסט.</div>
-        <div id="pdfStage" class="pdfstage">
-          <canvas id="pdfCanvas"></canvas>
-          <div id="pdfFound" class="pdfbox found" hidden></div>
-          <div id="pdfSel" class="pdfbox sel" hidden></div>
-        </div>
+        <div id="pdfStage" class="pdfstage"></div>
+        <div id="pdfSel" class="pdfbox sel" hidden></div>
       </section>
     </div>
     <div class="card">
@@ -1252,43 +1248,59 @@
     }
     return pdf.items[p];
   }
-  async function showPdfPage(p, foundRect){
-    pdf.page = p;
-    const page = await pdf.doc.getPage(p);
-    const stage = $('pdfStage'), cssW = Math.min(stage.clientWidth || 800, 1000);
-    const vp1 = page.getViewport({scale: 1}), viewport = page.getViewport({scale: cssW / vp1.width});
-    const dpr = window.devicePixelRatio || 1, c = $('pdfCanvas');
-    c.width = Math.round(viewport.width * dpr); c.height = Math.round(viewport.height * dpr);
-    c.style.width = viewport.width + 'px'; c.style.height = viewport.height + 'px';
-    pdf.viewport = viewport;
-    await page.render({canvasContext: c.getContext('2d'), viewport, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null}).promise;
-    $('pdfPage').textContent = 'עמוד ' + p + ' מתוך ' + pdf.doc.numPages;
-    $('pdfPrev').disabled = p <= 1; $('pdfNext').disabled = p >= pdf.doc.numPages;
-    const box = (el, r) => { if (!r){ el.hidden = true; return; }
-      const [x0, y0, x1, y1] = viewport.convertToViewportRectangle([r.x0, r.y0, r.x1, r.y1]);
-      Object.assign(el.style, {left: Math.min(x0, x1) - 3 + 'px', top: Math.min(y0, y1) - 3 + 'px', width: Math.abs(x1 - x0) + 6 + 'px', height: Math.abs(y1 - y0) + 6 + 'px'}); el.hidden = false; };
-    box($('pdfFound'), foundRect || null);
-    box($('pdfSel'), pdf.sel && pdf.sel.page === p ? pdf.sel : null);
+  // all pages one under the other, scrolled like any document; a page is drawn when it comes into view
+  async function showPdf(){
+    const stage = $('pdfStage'); stage.innerHTML = ''; stage.scrollTop = 0;
+    const cssW = Math.min(stage.clientWidth || 800, 1000), n = pdf.doc.numPages;
+    pdf.pages = [];
+    for (let p = 1; p <= n; p++){
+      const page = await pdf.doc.getPage(p);
+      const vp1 = page.getViewport({scale: 1}), viewport = page.getViewport({scale: cssW / vp1.width});
+      const div = document.createElement('div'); div.className = 'pdfpg'; div.dataset.p = p;
+      div.style.width = viewport.width + 'px'; div.style.height = viewport.height + 'px';
+      stage.appendChild(div);
+      pdf.pages[p] = {page, viewport, div, drawn: false};
+    }
+    const draw = async p => {
+      const pg = pdf.pages[p]; if (pg.drawn) return; pg.drawn = true;
+      const dpr = window.devicePixelRatio || 1, c = document.createElement('canvas');
+      c.width = Math.round(pg.viewport.width * dpr); c.height = Math.round(pg.viewport.height * dpr);
+      c.style.width = pg.viewport.width + 'px'; c.style.height = pg.viewport.height + 'px';
+      pg.div.prepend(c);
+      await pg.page.render({canvasContext: c.getContext('2d'), viewport: pg.viewport, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null}).promise;
+    };
+    const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) draw(+e.target.dataset.p); }), {root: stage, rootMargin: '400px 0px'});
+    pdf.pages.forEach(pg => pg && io.observe(pg.div));
+    pdf.io = io;
+    await draw(1);
+    showPageNo();
   }
+  // which page is in the middle of the view
+  function showPageNo(){
+    if (!pdf || !pdf.pages) return;
+    const stage = $('pdfStage'), mid = stage.scrollTop + stage.clientHeight / 2; let cur = 1;
+    for (let p = 1; p < pdf.pages.length; p++) if (pdf.pages[p].div.offsetTop <= mid) cur = p;
+    $('pdfPage').textContent = pdf.doc.numPages > 1 ? 'עמוד ' + cur + ' מתוך ' + pdf.doc.numPages : '';
+  }
+  $('pdfStage').addEventListener('scroll', showPageNo);
   // the PDF view takes the whole input card; the screenshot is set aside
-  function closePdf(){ pdf = null; $('pdfView').hidden = true; $('pick').hidden = false; }
+  function closePdf(){ if (pdf && pdf.io) pdf.io.disconnect(); pdf = null; $('pdfSel').hidden = true; $('pdfStage').innerHTML = ''; $('pdfView').hidden = true; $('pick').hidden = false; }
   async function loadPdf(file){
     $('pickStatus').textContent = '';
     if (shotFile) $('shotClear').click();
     $('pick').hidden = true; $('pdfView').hidden = false; pdfNote('פותח את ה-PDF…');
     try {
       const doc = await BidiPDF.open(file);
-      pdf = {doc, name: file.name, page: 1, items: {}, sel: null};
+      if (pdf && pdf.io) pdf.io.disconnect();
+      pdf = {doc, name: file.name, items: {}, sel: null}; $('pdfSel').hidden = true;
       $('pdfName').textContent = file.name || 'PDF';
-      await showPdfPage(1);
+      await showPdf();
       pdfNote('סמנו בגרירה אזור בעמוד כדי לחלץ ממנו את הטקסט.');
       run();
     } catch(e){ pdf = null; $('pick').hidden = false; $('pdfView').hidden = true; $('pickStatus').textContent = ('לא ניתן לפתוח את הקובץ: ' + (e && e.message ? e.message : String(e))); }
   }
   $('pdfOpen').addEventListener('click', () => $('pdfFile').click());
   $('pdfFile').addEventListener('change', e => { const f = e.target.files[0]; if (f) loadPdf(f); e.target.value = ''; });
-  $('pdfPrev').addEventListener('click', () => pdf && showPdfPage(pdf.page - 1));
-  $('pdfNext').addEventListener('click', () => pdf && showPdfPage(pdf.page + 1));
   $('pdfClear').addEventListener('click', () => { closePdf(); run(); });
   const drop = $('pdfDrop');
   drop.addEventListener('click', e => { if (e.target.id !== 'pdfOpen') $('pdfFile').click(); });
@@ -1302,18 +1314,21 @@
     const f = [...(e.dataTransfer ? e.dataTransfer.files : [])].find(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
     if (f){ e.preventDefault(); loadPdf(f); }
   });
-  // drag to mark an area on the page
-  { const stage = $('pdfStage'); let start = null;
-    const pt = e => { const r = $('pdfCanvas').getBoundingClientRect(); return {x: e.clientX - r.left, y: e.clientY - r.top}; };
-    stage.addEventListener('pointerdown', e => { if (!pdf) return; start = pt(e); stage.setPointerCapture(e.pointerId); });
-    stage.addEventListener('pointermove', e => { if (!start) return; const q = pt(e), el = $('pdfSel');
-      Object.assign(el.style, {left: Math.min(start.x, q.x) + 'px', top: Math.min(start.y, q.y) + 'px', width: Math.abs(q.x - start.x) + 'px', height: Math.abs(q.y - start.y) + 'px'}); el.hidden = false; });
+  // drag to mark an area on a page
+  { const stage = $('pdfStage'), sel = $('pdfSel'); let start = null, pg = null;
+    const pt = e => { const r = pg.div.getBoundingClientRect(); return {x: Math.min(Math.max(0, e.clientX - r.left), r.width), y: Math.min(Math.max(0, e.clientY - r.top), r.height)}; };
+    stage.addEventListener('pointerdown', e => {
+      const div = e.target.closest && e.target.closest('.pdfpg'); if (!pdf || !div || e.button) return;
+      pg = pdf.pages[+div.dataset.p]; start = pt(e); div.appendChild(sel); stage.setPointerCapture(e.pointerId);
+    });
+    stage.addEventListener('pointermove', e => { if (!start) return; const q = pt(e);
+      Object.assign(sel.style, {left: Math.min(start.x, q.x) + 'px', top: Math.min(start.y, q.y) + 'px', width: Math.abs(q.x - start.x) + 'px', height: Math.abs(q.y - start.y) + 'px'}); sel.hidden = false; });
     stage.addEventListener('pointerup', e => { if (!start) return; const q = pt(e), a = start; start = null;
-      if (Math.abs(q.x - a.x) < 6 || Math.abs(q.y - a.y) < 6){ pdf.sel = null; $('pdfSel').hidden = true; run(); return; }   // a click clears the mark
-      const [x0, y0] = pdf.viewport.convertToPdfPoint(Math.min(a.x, q.x), Math.max(a.y, q.y));
-      const [x1, y1] = pdf.viewport.convertToPdfPoint(Math.max(a.x, q.x), Math.min(a.y, q.y));
-      pdf.sel = {page: pdf.page, x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1)};
-      $('pdfFound').hidden = true; run(); });
+      if (Math.abs(q.x - a.x) < 6 || Math.abs(q.y - a.y) < 6){ pdf.sel = null; sel.hidden = true; run(); return; }   // a click clears the mark
+      const [x0, y0] = pg.viewport.convertToPdfPoint(Math.min(a.x, q.x), Math.max(a.y, q.y));
+      const [x1, y1] = pg.viewport.convertToPdfPoint(Math.max(a.x, q.x), Math.min(a.y, q.y));
+      pdf.sel = {page: +pg.div.dataset.p, x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1)};
+      run(); });
   }
 
   document.addEventListener('paste', e => {
