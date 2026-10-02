@@ -49,6 +49,7 @@
   .pdfpg{position:relative;margin:0 auto;background:#fff}
   .pdfpg + .pdfpg{border-top:6px solid var(--line)}
   .pdfbox{position:absolute;pointer-events:none;border-radius:2px}
+  .pdfbox .num{position:absolute;top:-10px;right:-10px;min-width:20px;height:20px;border-radius:10px;background:var(--accent);color:#fff;font-size:12px;line-height:20px;text-align:center}
   .pdfbox.sel{border:2px solid var(--accent);background:rgba(37,99,235,.12)}
   .shot{border:2px dashed var(--line);border-radius:10px;padding:16px;font-size:15px;color:var(--muted);outline:none;min-height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center;cursor:pointer}
   .shot b{color:var(--ink)}
@@ -79,7 +80,7 @@
             <button id="pdfOpen">טעינת PDF</button>
             <ul class="why">
               <li>מדויק יותר: התווים נקראים ישירות מהקובץ.</li>
-              <li>אחרי הטעינה תוכלו לסמן את החלק שתרצו לחלץ.</li>
+              <li>אחרי הטעינה תוכלו לסמן את החלקים שתרצו לחלץ.</li>
             </ul>
             <input type="file" id="pdfFile" accept="application/pdf,.pdf" hidden>
           </div>
@@ -99,9 +100,8 @@
             <button id="pdfClear">הסרת ה-PDF</button>
           </span>
         </h2>
-        <div id="pdfStatus" class="status">סמנו בגרירה אזור בעמוד כדי לחלץ ממנו את הטקסט.</div>
+        <div id="pdfStatus" class="status">סמנו בגרירה את החלקים שתרצו לחלץ. לחיצה על חלק מסומן מבטלת אותו.</div>
         <div id="pdfStage" class="pdfstage"></div>
-        <div id="pdfSel" class="pdfbox sel" hidden></div>
       </section>
     </div>
     <div class="card">
@@ -1208,11 +1208,16 @@
   async function run(){
     if (pdf){
       // a marked area: its text, straight from the file
-      if (pdf.sel){
-        const items = (await pdfPageItems(pdf.sel.page)).filter(it => { const cx = it.x + it.w/2, cy = it.y + it.h/2; return cx >= pdf.sel.x0 && cx <= pdf.sel.x1 && cy >= pdf.sel.y0 && cy <= pdf.sel.y1; });
-        const r = BidiFix.fromPdfItems(items);
-        setOut(r.text); pdfNote(r.text ? 'הטקסט נלקח ישירות מה-PDF, מהאזור שסומן.' : 'לא נמצא טקסט באזור שסומן. אם זה מסמך סרוק, השתמשו בצילום מסך.', !!r.text);
-      } else { setOut(''); pdfNote('סמנו בגרירה אזור בעמוד כדי לחלץ ממנו את הטקסט.'); }
+      // the marked parts, in the order they were marked, an empty line between them
+      if (pdf.sels.length){
+        const parts = [];
+        for (const m of pdf.sels){
+          const items = (await pdfPageItems(m.page)).filter(it => { const cx = it.x + it.w/2, cy = it.y + it.h/2; return cx >= m.x0 && cx <= m.x1 && cy >= m.y0 && cy <= m.y1; });
+          const t = BidiFix.fromPdfItems(items).text.trim(); if (t) parts.push(t);
+        }
+        const text = parts.join('\n\n');
+        setOut(text); pdfNote(text ? 'הטקסט נלקח ישירות מה-PDF, מהחלקים שסומנו. לחיצה על חלק מסומן מבטלת אותו.' : 'לא נמצא טקסט בחלקים שסומנו. אם זה מסמך סרוק, השתמשו בצילום מסך.', !!text);
+      } else { setOut(''); pdfNote('סמנו בגרירה את החלקים שתרצו לחלץ. לחיצה על חלק מסומן מבטלת אותו.'); }
       return;
     }
     if (!ocr){ setOut(''); return; }
@@ -1284,7 +1289,7 @@
   }
   $('pdfStage').addEventListener('scroll', showPageNo);
   // the PDF view takes the whole input card; the screenshot is set aside
-  function closePdf(){ if (pdf && pdf.io) pdf.io.disconnect(); pdf = null; $('pdfSel').hidden = true; $('pdfStage').innerHTML = ''; $('pdfView').hidden = true; $('pick').hidden = false; }
+  function closePdf(){ if (pdf && pdf.io) pdf.io.disconnect(); pdf = null; $('pdfStage').innerHTML = ''; $('pdfView').hidden = true; $('pick').hidden = false; }
   async function loadPdf(file){
     $('pickStatus').textContent = '';
     if (shotFile) $('shotClear').click();
@@ -1292,10 +1297,10 @@
     try {
       const doc = await BidiPDF.open(file);
       if (pdf && pdf.io) pdf.io.disconnect();
-      pdf = {doc, name: file.name, items: {}, sel: null}; $('pdfSel').hidden = true;
+      pdf = {doc, name: file.name, items: {}, sels: []};
       $('pdfName').textContent = file.name || 'PDF';
       await showPdf();
-      pdfNote('סמנו בגרירה אזור בעמוד כדי לחלץ ממנו את הטקסט.');
+      pdfNote('סמנו בגרירה את החלקים שתרצו לחלץ. לחיצה על חלק מסומן מבטלת אותו.');
       run();
     } catch(e){ pdf = null; $('pick').hidden = false; $('pdfView').hidden = true; $('pickStatus').textContent = ('לא ניתן לפתוח את הקובץ: ' + (e && e.message ? e.message : String(e))); }
   }
@@ -1314,21 +1319,31 @@
     const f = [...(e.dataTransfer ? e.dataTransfer.files : [])].find(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
     if (f){ e.preventDefault(); loadPdf(f); }
   });
-  // drag to mark an area on a page
-  { const stage = $('pdfStage'), sel = $('pdfSel'); let start = null, pg = null;
+  // drag to mark parts of the pages; several parts can be marked, and a click on a marked part removes it
+  { const stage = $('pdfStage'); let start = null, pg = null, box = null;
     const pt = e => { const r = pg.div.getBoundingClientRect(); return {x: Math.min(Math.max(0, e.clientX - r.left), r.width), y: Math.min(Math.max(0, e.clientY - r.top), r.height)}; };
+    const numberBoxes = () => pdf.sels.forEach((m, k) => { m.box.querySelector('.num').textContent = k + 1; });
     stage.addEventListener('pointerdown', e => {
       const div = e.target.closest && e.target.closest('.pdfpg'); if (!pdf || !div || e.button) return;
-      pg = pdf.pages[+div.dataset.p]; start = pt(e); div.appendChild(sel); stage.setPointerCapture(e.pointerId);
+      pg = pdf.pages[+div.dataset.p]; start = pt(e);
+      box = document.createElement('div'); box.className = 'pdfbox sel'; box.hidden = true; box.innerHTML = '<span class="num"></span>'; div.appendChild(box);
+      stage.setPointerCapture(e.pointerId);
     });
     stage.addEventListener('pointermove', e => { if (!start) return; const q = pt(e);
-      Object.assign(sel.style, {left: Math.min(start.x, q.x) + 'px', top: Math.min(start.y, q.y) + 'px', width: Math.abs(q.x - start.x) + 'px', height: Math.abs(q.y - start.y) + 'px'}); sel.hidden = false; });
+      Object.assign(box.style, {left: Math.min(start.x, q.x) + 'px', top: Math.min(start.y, q.y) + 'px', width: Math.abs(q.x - start.x) + 'px', height: Math.abs(q.y - start.y) + 'px'}); box.hidden = false; });
     stage.addEventListener('pointerup', e => { if (!start) return; const q = pt(e), a = start; start = null;
-      if (Math.abs(q.x - a.x) < 6 || Math.abs(q.y - a.y) < 6){ pdf.sel = null; sel.hidden = true; run(); return; }   // a click clears the mark
+      if (Math.abs(q.x - a.x) < 6 || Math.abs(q.y - a.y) < 6){
+        box.remove();
+        // a click on a marked part removes it
+        const p = +pg.div.dataset.p, k = pdf.sels.findIndex(m => m.page === p && a.x >= m.px.x0 && a.x <= m.px.x1 && a.y >= m.px.y0 && a.y <= m.px.y1);
+        if (k >= 0){ pdf.sels[k].box.remove(); pdf.sels.splice(k, 1); numberBoxes(); run(); }
+        return;
+      }
       const [x0, y0] = pg.viewport.convertToPdfPoint(Math.min(a.x, q.x), Math.max(a.y, q.y));
       const [x1, y1] = pg.viewport.convertToPdfPoint(Math.max(a.x, q.x), Math.min(a.y, q.y));
-      pdf.sel = {page: +pg.div.dataset.p, x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1)};
-      run(); });
+      pdf.sels.push({page: +pg.div.dataset.p, x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1), box,
+        px: {x0: Math.min(a.x, q.x), y0: Math.min(a.y, q.y), x1: Math.max(a.x, q.x), y1: Math.max(a.y, q.y)}});
+      numberBoxes(); run(); });
   }
 
   document.addEventListener('paste', e => {
