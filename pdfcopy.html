@@ -51,7 +51,7 @@
   .shot:focus,.shot.drag,.pdfdrop.drag{border-color:var(--accent)}
   .shotstage{margin-top:8px;overflow:auto;max-height:80vh;border:1px solid var(--line);border-radius:8px;background:#fff}
   .shotstage img{display:block;max-width:100%;height:auto;cursor:zoom-in}
-  .lens{position:fixed;z-index:10;left:50%;top:50%;transform:translate(-50%,-50%);border:2px solid var(--accent);border-radius:8px;background:#fff;box-shadow:0 8px 32px rgba(0,0,0,.4);pointer-events:none}
+  .lens{position:fixed;z-index:10;left:50%;top:50%;transform:translate(-50%,-50%);border:2px solid var(--accent);border-radius:8px;background:#fff;box-shadow:0 0 0 100vmax rgba(0,0,0,.45),0 8px 32px rgba(0,0,0,.4);cursor:zoom-out}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   code{background:var(--bg);padding:1px 5px;border-radius:4px}
 </style>
@@ -1324,15 +1324,15 @@
   shot.addEventListener('dragover', e => { e.preventDefault(); shot.classList.add('drag'); });
   shot.addEventListener('dragleave', () => shot.classList.remove('drag'));
   shot.addEventListener('drop', e => { e.preventDefault(); shot.classList.remove('drag'); const f = [...e.dataTransfer.files].find(f => f.type.startsWith('image/')); if (f) useImage(f); });
-  // hovering over the screenshot shows all of it enlarged, as large as the window allows
+  // clicking the screenshot shows all of it enlarged, as large as the window allows; a click or Esc closes it
   { const img = $('shotImg'), lens = $('lens');
-    img.addEventListener('mouseenter', () => {
+    img.addEventListener('click', () => {
       const w = img.naturalWidth, h = img.naturalHeight; if (!w || !h) return;
       const z = Math.min(window.innerWidth * 0.95 / w, window.innerHeight * 0.92 / h, 3);
-      if (z * w <= img.getBoundingClientRect().width * 1.1) return;   // the shown screenshot is already this large
       lens.src = img.src; lens.style.width = Math.round(w * z) + 'px'; lens.style.height = Math.round(h * z) + 'px'; lens.hidden = false;
     });
-    img.addEventListener('mouseleave', () => { lens.hidden = true; });
+    document.addEventListener('click', e => { if (!lens.hidden && e.target !== img) lens.hidden = true; }, true);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') lens.hidden = true; });
   }
   $('shotClear').addEventListener('click', () => { ocr = null; shotFile = null; $('shotView').hidden = true; if (!pdf) $('pick').hidden = false; note(''); run(); });
   $('copy').addEventListener('click', async ()=>{
