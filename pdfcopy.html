@@ -920,7 +920,7 @@
         const ka = A.map(w => wkey(w.t)), kb = B.map(wkey);
         const latinOnly = w => /[A-Za-z]/.test(w.t) && !HEB.test(w.t);
         for (let i = 0; i < A.length; i++){
-          const mt = A[i].t.match(/^([A-Za-z][A-Za-z0-9\/.]*)-[0-9lI|]{1,2}([.,:;)]*)$/); if (!mt) continue;
+          const mt = A[i].t.match(/^([A-Za-z][A-Za-z0-9\/.]*)-[0-9lI|wW?>]{1,2}([.,:;)]*)$/); if (!mt) continue;   // "TSH-w" for "ש-TSH"
           let s0 = i; while (s0 > 0 && latinOnly(A[s0-1]) && !/[.,:;]$/.test(A[s0-1].t)) s0--;
           let e0 = i; while (e0 + 1 < A.length && latinOnly(A[e0+1])) e0++;
           // the Hebrew-only words between the neighbours both readings share
@@ -1485,7 +1485,8 @@ window.BidiOCR = (function(){
     heb:  {langs: ['heb'], max: Math.min(2, cores)},
     eng:  {langs: ['eng'], max: Math.min(3, cores), init: e => e.setParameters({tessedit_pageseg_mode: '7'})},
     eng1: {langs: ['eng'], max: Math.min(2, cores)},
-    hebw: {langs: ['heb'], max: 1, init: e => e.setParameters({tessedit_pageseg_mode: '7'})}
+    hebw: {langs: ['heb'], max: 1, init: e => e.setParameters({tessedit_pageseg_mode: '7'})},
+    hebc: {langs: ['heb'], max: 1, init: e => e.setParameters({tessedit_pageseg_mode: '10'})}
   };
   for (const k in POOLS) Object.assign(POOLS[k], {idle: [], count: 0, waiting: []});
   async function withWorker(key, fn){
@@ -1603,17 +1604,17 @@ window.BidiOCR = (function(){
           const mid = Math.round((syms[k-1].bbox.x1 + syms[k].bbox.x0) / 2);
           const L = [bb.x0, mid], R = [mid, bb.x1];
           const [ex, hx] = engSideLeft ? [L, R] : [R, L];
-          if (ex[1] - ex[0] < h * 1.2 || hx[1] - hx[0] < h * 0.8) continue;
+          if (ex[1] - ex[0] < h * 0.9 || hx[1] - hx[0] < h * 0.8) continue;
           const [er, hr] = await Promise.all([withWorker('eng', s => s.w.recognize(cut(...ex))), withWorker('hebw', s => s.w.recognize(cut(...hx)))]);
           const et = er.data.text.trim(), ht = hr.data.text.trim();
-          if (!/^[A-Za-z]{3,}[.,:;]?$/.test(et) || !hebOnlyWord(ht)) continue;
+          if (!/^([A-Za-z]{3,}|[A-Z]{2})[.,:;]?$/.test(et) || !hebOnlyWord(ht)) continue;
           const score = Math.min(er.data.confidence, hr.data.confidence);
           if (!best || score > best.score) best = {score, et, ht, ex, hx, ec: er.data.confidence, hc: hr.data.confidence};
         }
         if (wholeOk && wc >= 80 && (!best || wc >= best.score)){
-          if (isLatin(t)){ ws[i] = Object.assign({}, w, {text: wt, confidence: wc}); changed = true; continue; }
+          if (isLatin(t)){ ws[i] = Object.assign({}, w, {symbols: [], text: wt, confidence: wc}); changed = true; continue; }
           // it was taken as Hebrew: it joins the English stretch beside it, in its place left to right
-          const nw = Object.assign({}, w, {text: wt, confidence: wc});
+          const nw = Object.assign({}, w, {symbols: [], text: wt, confidence: wc});
           ws.splice(i, 1);
           if (ws[i] && isLatin(ws[i].text)) insertLatin(ws, i, nw, true);
           else if (ws[i-1] && isLatin(ws[i-1].text)) insertLatin(ws, i, nw, false);
@@ -1628,8 +1629,8 @@ window.BidiOCR = (function(){
         const core = ht.replace(/[^א-ת]/g, ''), letters = t.replace(/[^א-ת]/g, '');
         const same = atLeft ? letters.slice(0, core.length) : letters.slice(-core.length);
         if (same.length === core.length && same !== core && [...core].filter((c, k) => c !== same[k]).length === 1) ht = ht.replace(core, same);
-        const hebPart = Object.assign({}, w, {text: ht, confidence: best.hc, bbox: {x0: best.hx[0], x1: best.hx[1], y0: bb.y0, y1: bb.y1}});
-        const engParts = [Object.assign({}, w, {text: best.et, confidence: best.ec, bbox: {x0: best.ex[0], x1: best.ex[1], y0: bb.y0, y1: bb.y1}})];
+        const hebPart = Object.assign({}, w, {symbols: [], text: ht, confidence: best.hc, bbox: {x0: best.hx[0], x1: best.hx[1], y0: bb.y0, y1: bb.y1}});
+        const engParts = [Object.assign({}, w, {symbols: [], text: best.et, confidence: best.ec, bbox: {x0: best.ex[0], x1: best.ex[1], y0: bb.y0, y1: bb.y1}})];
         if (isLatin(t)){
           // the word was taken as English, inside the English stretch: the English part stays, the Hebrew part moves out
           ws.splice(i, 1, engParts[0], hebPart); moveOutOfLatin(ws, i + 1); i++; changed = true; continue;
@@ -1642,6 +1643,112 @@ window.BidiOCR = (function(){
       if (changed) l.words = ws;
     }
   }
+  // A Hebrew one-letter prefix written against an English word with no hyphen ("לEEG", "בMRI") sits just right of the
+  // English on screen. The combined reading turns it into a stray mark at the word's end ("EEG?", "MRI2") or drops it.
+  // The ink right of the English letters is cut out and read as one Hebrew letter; a prefix letter read surely is kept.
+  async function fixPrefixes(canvas, data){
+    const g = canvas.getContext('2d', {willReadFrequently: true});
+    const PRE = /^[ובלהמכש]$/;
+    for (const b of data.blocks) for (const p of b.paragraphs) for (const l of p.lines){
+      if (!l.words.some(w => /[א-ת]/.test(w.text))) continue;
+      const ws = l.words;
+      for (let i = 0; i < ws.length; i++){
+        const w = ws[i], t = w.text.replace(/[‎‏]/g, '');
+        if (!isLatin(t) || !/[A-Za-z]{2}/.test(t) || w.prefixed) continue;
+        const syms = (w.symbols || []).slice().sort((p, q) => p.bbox.x0 - q.bbox.x0);
+        if (!syms.length) continue;
+        // the word was rewritten as English by an earlier step but its letters still show a Hebrew prefix letter on the right
+        const rs = syms[syms.length - 1];
+        if (PRE.test(rs.text) && rs.confidence >= 80 && !/[\u05D0-\u05EA]/.test(t)){ ws[i] = Object.assign({}, w, {text: rs.text + t.replace(/^[^A-Za-z(\[]+/, ''), prefixed: true}); continue; }
+        // the English letters end at the last letter; anything after it on the right is a candidate (a mark, a digit, an S...)
+        let last = syms.length - 1; while (last > 0 && !/[A-Za-z]/.test(syms[last].text)) last--;
+        const trail = syms.slice(last + 1).map(y => y.text).join('');
+        // heights from the whole line: a word in small letters ("asthma") is shorter than a prefix letter
+        const bb = {x0: w.bbox.x0, x1: w.bbox.x1, y0: Math.min(w.bbox.y0, l.bbox.y0), y1: Math.max(w.bbox.y1, l.bbox.y1)}, h = Math.max(w.bbox.y1 - w.bbox.y0, Math.round((l.bbox.y1 - l.bbox.y0) * 0.8));
+        // the next word on the right on screen limits the search
+        const right = ws.filter(o => o !== w && o.bbox.x0 >= bb.x1 - 2).reduce((m, o) => Math.min(m, o.bbox.x0), Infinity);
+        const x0 = syms[last].bbox.x1 + 1, x1 = Math.min(right - 1, Math.max(bb.x1, x0) + Math.round(h * 0.9), canvas.width - 1);
+        if (x1 - x0 < h * 0.2) continue;
+        // ink in that strip, at text height
+        const y0 = bb.y0, hh = h, d = g.getImageData(x0, y0, x1 - x0, hh).data, W = x1 - x0;
+        let ix0 = -1, ix1 = -1;
+        for (let x = 0; x < W; x++){ let ink = 0; for (let y = 0; y < hh; y++){ const k = (y * W + x) * 4; if (d[k]*0.3 + d[k+1]*0.59 + d[k+2]*0.11 < 140) ink++; }
+          if (ink >= 1){ if (ix0 < 0) ix0 = x; ix1 = x; } else if (ix0 >= 0 && x - ix1 > h * 0.4) break; }
+        if (ix0 < 0 || ix1 - ix0 < h * 0.2 || ix1 - ix0 > h * 1.1 || ix0 > h * 0.5) continue;
+        // enlarged to about 40 pixels of text height: one small letter is hard to read at screen size
+        const sc = Math.max(1, 40 / hh), pad = Math.round(hh * 0.4 * sc), c = document.createElement('canvas');
+        c.width = Math.round((ix1 - ix0 + 1) * sc) + 2 * pad; c.height = Math.round(hh * sc) + 2 * pad;
+        const cg = c.getContext('2d'); cg.fillStyle = '#fff'; cg.fillRect(0, 0, c.width, c.height); cg.imageSmoothingQuality = 'high';
+        cg.drawImage(canvas, x0 + ix0, y0, ix1 - ix0 + 1, hh, pad, pad, Math.round((ix1 - ix0 + 1) * sc), Math.round(hh * sc));
+        // read as a short line first, which keeps a hyphen after the letter ("ו-MRI"); then as a single letter
+        let r = await withWorker('hebw', s => s.w.recognize(c)), ch = r.data.text.trim().replace(/[\u05BE\u2010-\u2014]/g, '-');
+        if (!/^[ובלהמכש]-$/.test(ch) || r.data.confidence < 70){ r = await withWorker('hebc', s => s.w.recognize(c)); ch = r.data.text.trim(); }
+        // a stray mark where the prefix is ("EEG?") already hints at it, so a little less certainty is needed
+        if (!(PRE.test(ch) || /^[ובלהמכש]-$/.test(ch)) || r.data.confidence < (/[^\w\s.,:;)\u200e\u200f]|\d/.test(trail) ? 60 : 70)) continue;
+        // a real full stop or comma is a small mark low on the line; a prefix letter is a full letter
+        if (/^[.,]$/.test(trail) && (ix1 - ix0) < h * 0.3) continue;
+        // the word's own text, without what follows its last letter (its letters' positions can overlap, so not rebuilt from them)
+        const core = t.replace(/[^A-Za-z]+$/, '');
+        ws[i] = Object.assign({}, w, {text: core, prefixed: true});
+        // the prefix belongs to the first word of the English stretch ("לmild intermittent asthma"): on screen it sits
+        // right of the stretch's last word, so it goes to the stretch's leftmost word
+        let a = i, z = i; while (a > 0 && isLatin(ws[a-1].text)) a--; while (z + 1 < ws.length && isLatin(ws[z+1].text)) z++;
+        let first = a; for (let k = a; k <= z; k++) if (ws[k].bbox.x0 < ws[first].bbox.x0) first = k;
+        const f = ws[first], lead = (f.text.match(/^[^A-Za-z0-9(\[]+/) || [''])[0];
+        ws[first] = Object.assign({}, f, {text: lead + ch + f.text.slice(lead.length), prefixed: true});
+      }
+    }
+  }
+  // English acronyms read as Hebrew letters and digits ("TSH" as "ופד", "ב-VP" as "ב-סץ", "EMG" as "6א8"): a short
+  // doubtful word of Hebrew letters and digits is read again with English only, without its Hebrew prefix if it has one;
+  // a clear acronym, read surely, replaces it. Very common short Hebrew words and words both readings agree on are kept.
+  const SHORT_HEB = new Set(['עם','של','על','או','אך','גם','כי','לא','אם','כל','רק','מול','זה','זו','יש','אין','את','הוא','היא','הם','לו','לה','בו','בה','עד','כן','אז','פה','שם','מה','מי','אל','בן','בת','יום','ללא','לפי','בין','תוך','כמו']);
+  async function fixAcronyms(canvas, data, hebData){
+    const hebWords = hebData ? hebData.blocks.flatMap(b => b.paragraphs.flatMap(p => p.lines.flatMap(l => l.words))) : [];
+    const overlap = (a, b) => Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+    for (const b of data.blocks) for (const p of b.paragraphs) for (const l of p.lines){
+      if (!l.words.some(w => /[א-ת]/.test(w.text))) continue;
+      const ws = l.words;
+      for (let i = 0; i < ws.length; i++){
+        const w = ws[i], t = w.text.replace(/[‎‏]/g, '');
+        const m = t.match(/^([(]?)([ובלהמכש]-|[ובלהמכש](?=[א-ת0-9]{2}))?([א-ת0-9]{2,6})([.,:;)]*)$/);
+        if (!m || !/[א-ת]/.test(m[2] ? m[3] : t) && !/\d/.test(m[3])) continue;
+        const [, open, pre0, core, close] = m;
+        // Hebrew letters mixed with digits, or a prefix letter glued to digits ("ל5185"), is never a real word
+        const mixed = (/\d/.test(core) && /[א-ת]/.test(core)) || (pre0 && !pre0.endsWith('-') && /^\d{3,}$/.test(core));
+        // otherwise a short word that is not a very common one; its confidence says little (Tesseract is sure of "ופד")
+        if (!mixed && (core.length > 4 || SHORT_HEB.has(core) || SHORT_HEB.has((pre0 || '').replace('-', '') + core))) continue;
+        if (/^\d+$/.test(core) && !pre0) continue;   // a plain number
+        // how sure the Hebrew-only reading is of the same spot
+        const hw = hebWords.find(x => overlap(x.bbox, w.bbox) > 0.6 * (w.bbox.x1 - w.bbox.x0));
+        const hebConf = hw && /[א-ת]/.test(hw.text) ? hw.confidence : 0;
+        // the prefix (and its hyphen) are the rightmost letters on screen; the acronym is the rest
+        const syms = (w.symbols || []).slice().sort((p, q) => p.bbox.x0 - q.bbox.x0);
+        const preLen = pre0 ? pre0.length : 0;
+        if (preLen && syms.length <= preLen) continue;
+        const bb = w.bbox, h = bb.y1 - bb.y0;
+        const x1 = preLen ? syms[syms.length - preLen].bbox.x0 - 1 : bb.x1 + Math.round(h * 0.15), x0 = Math.max(0, bb.x0 - Math.round(h * 0.15));
+        if (x1 - x0 < h * 0.6) continue;
+        const pad = Math.round(h * 0.35), sc = Math.max(1, 40 / h), c = document.createElement('canvas');
+        c.width = Math.round((x1 - x0) * sc) + 2 * pad; c.height = Math.round(h * sc) + 2 * pad;
+        const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.imageSmoothingQuality = 'high';
+        g.drawImage(canvas, x0, bb.y0, x1 - x0, h, pad, pad, Math.round((x1 - x0) * sc), Math.round(h * sc));
+        const r = await withWorker('eng', s => s.w.recognize(c));
+        const et = r.data.text.trim().replace(/[^A-Za-z0-9\/\-]+$/, '').replace(/^[^A-Za-z0-9]+/, '');
+        const acronym = /^[A-Z][A-Za-z0-9\/]{1,5}$/.test(et) && (et.match(/[A-Z]/g) || []).length >= 2;
+        // a garbled word may also be a plain English word ("08ט68," for "cauda,")
+        const word = mixed && /^[A-Za-z][a-z]{2,}$/.test(et) && r.data.confidence >= 70;
+        if (!word && (!acronym || r.data.confidence < (mixed ? 50 : 88) || (!mixed && r.data.confidence <= hebConf + 5))) continue;
+        const nw = Object.assign({}, w, {symbols: [], text: open + (pre0 || '') + et + close, confidence: r.data.confidence, prefixed: true});
+        if (pre0){ ws[i] = nw; continue; }
+        // a bare acronym next to an English stretch joins it, in its place left to right
+        ws.splice(i, 1);
+        if (ws[i] && isLatin(ws[i].text)) insertLatin(ws, i, nw, true);
+        else if (ws[i-1] && isLatin(ws[i-1].text)) insertLatin(ws, i, nw, false);
+        else ws.splice(i, 0, nw);
+      }
+    }
+  }
   // A slower second look at the doubtful words: each one is cut out with a word on each side, enlarged, and read again
   // three ways (Hebrew and English together, Hebrew only, English only). A new reading replaces the word only when it is
   // clearly surer; English read where a Hebrew word is gets moved out of the English stretch like above.
@@ -1650,7 +1757,7 @@ window.BidiOCR = (function(){
     for (const b of data.blocks) for (const p of b.paragraphs) for (const l of p.lines){
       const ws = l.words;
       ws.forEach((w, i) => {
-        if (w.confidence >= 75 || !w.text.trim()) return;
+        if (w.confidence >= 75 || !w.text.trim() || w.prefixed) return;
         const near = [ws[i-1], w, ws[i+1]].filter(Boolean);
         const x0 = Math.min(...near.map(x => x.bbox.x0)), x1 = Math.max(...near.map(x => x.bbox.x1));
         const y0 = Math.min(...near.map(x => x.bbox.y0)), y1 = Math.max(...near.map(x => x.bbox.y1)), h = w.bbox.y1 - w.bbox.y0;
@@ -1744,6 +1851,8 @@ window.BidiOCR = (function(){
     const best = readings.slice().sort((x, y) => y.conf - x.conf)[0];
     const hebData = withHebOnly ? (await Promise.all(heb))[best.k].data : null;
     await fixMixed(best.canvas, best.data, hebData);
+    await fixPrefixes(best.canvas, best.data);
+    await fixAcronyms(best.canvas, best.data, hebData);
     if (!window.__noSecondLook) await secondLook(best.canvas, best.data);
     const res = {text: toText(best.data), paras: toParas(best.data), hebParas: hebData ? toParas(hebData) : null, alts: readings.map(r => r.text), canvas: best.canvas};
     return res;
