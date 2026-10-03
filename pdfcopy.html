@@ -1816,6 +1816,36 @@ window.BidiOCR = (function(){
     }
     return nums.concat(block);
   }
+  // A final ם is often read as ס ("ממצאיס", "עס"); the two differ in shape: ם has square bottom corners, ס rounded ones.
+  // The ink in the bottom corners of each word-final ס is compared with the final ם letters read surely in the same
+  // screenshot (so it fits the font); a ס shaped like those ם letters becomes ם.
+  function fixFinalMem(canvas, data){
+    const g = canvas.getContext('2d', {willReadFrequently: true});
+    const corners = bb => {
+      const w = bb.x1 - bb.x0, h = bb.y1 - bb.y0; if (w < 4 || h < 4) return null;
+      const d = g.getImageData(bb.x0, bb.y0, w, h).data, cw = Math.max(1, Math.round(w * 0.25)), ch = Math.max(1, Math.round(h * 0.25));
+      let ink = 0, n = 0;
+      for (const x0 of [0, w - cw]) for (let y = h - ch; y < h; y++) for (let x = x0; x < x0 + cw; x++){
+        const k = (y * w + x) * 4; n++; if (d[k]*0.3 + d[k+1]*0.59 + d[k+2]*0.11 < 140) ink++; }
+      return ink / n;
+    };
+    const words = data.blocks.flatMap(b => b.paragraphs.flatMap(p => p.lines.flatMap(l => l.words)));
+    const lastSym = w => { const ys = (w.symbols || []).filter(y => /[א-ת]/.test(y.text)); return ys.length ? ys.reduce((m, y) => y.bbox.x0 < m.bbox.x0 ? y : m) : null; };
+    const mem = [], sam = [];
+    for (const w of words){
+      const t = w.text.replace(/[^א-ת]/g, ''); if (t.length < 2) continue;
+      const y = lastSym(w); if (!y) continue;
+      if (t.endsWith('ם') && y.text === 'ם' && w.confidence >= 85){ const c = corners(y.bbox); if (c !== null) mem.push(c); }
+      if (t.endsWith('ס') && y.text === 'ס') sam.push([w, y]);
+    }
+    if (mem.length < 3 || !sam.length) return;
+    mem.sort((a, b) => a - b);
+    const ref = mem[Math.floor(mem.length / 2)];
+    for (const [w, y] of sam){
+      const c = corners(y.bbox);
+      if (c !== null && c >= ref * 0.7) w.text = w.text.replace(/ס([^א-ת]*)$/, 'ם$1');
+    }
+  }
   // A slower second look at the doubtful words: each one is cut out with a word on each side, enlarged, and read again
   // three ways (Hebrew and English together, Hebrew only, English only). A new reading replaces the word only when it is
   // clearly surer; English read where a Hebrew word is gets moved out of the English stretch like above.
@@ -1921,6 +1951,7 @@ window.BidiOCR = (function(){
     await fixPrefixes(best.canvas, best.data);
     await fixAcronyms(best.canvas, best.data, hebData);
     layoutLines(best.data, hebData);
+    fixFinalMem(best.canvas, best.data);
     if (!window.__noSecondLook) await secondLook(best.canvas, best.data);
     const res = {text: toText(best.data), paras: toParas(best.data), hebParas: hebData ? toParas(hebData) : null, alts: readings.map(r => r.text), canvas: best.canvas};
     return res;
