@@ -1482,6 +1482,7 @@ window.BidiOCR = (function(){
     both: {langs: ['heb','eng'], max: Math.min(2, cores)},
     heb:  {langs: ['heb'], max: Math.min(2, cores)},
     eng:  {langs: ['eng'], max: Math.min(3, cores), init: e => e.setParameters({tessedit_pageseg_mode: '7'})},
+    eng1: {langs: ['eng'], max: Math.min(2, cores)},
     hebw: {langs: ['heb'], max: 1, init: e => e.setParameters({tessedit_pageseg_mode: '7'})}
   };
   for (const k in POOLS) Object.assign(POOLS[k], {idle: [], count: 0, waiting: []});
@@ -1628,6 +1629,52 @@ window.BidiOCR = (function(){
       if (changed) l.words = ws;
     }
   }
+  // A slower second look at the doubtful words: each one is cut out with a word on each side, enlarged, and read again
+  // three ways (Hebrew and English together, Hebrew only, English only). A new reading replaces the word only when it is
+  // clearly surer; English read where a Hebrew word is gets moved out of the English stretch like above.
+  async function secondLook(canvas, data){
+    const jobs = [];
+    for (const b of data.blocks) for (const p of b.paragraphs) for (const l of p.lines){
+      const ws = l.words;
+      ws.forEach((w, i) => {
+        if (w.confidence >= 75 || !w.text.trim()) return;
+        const near = [ws[i-1], w, ws[i+1]].filter(Boolean);
+        const x0 = Math.min(...near.map(x => x.bbox.x0)), x1 = Math.max(...near.map(x => x.bbox.x1));
+        const y0 = Math.min(...near.map(x => x.bbox.y0)), y1 = Math.max(...near.map(x => x.bbox.y1)), h = w.bbox.y1 - w.bbox.y0;
+        jobs.push({l, w, rect: {x0: Math.max(0, x0 - h), y0: Math.max(0, y0 - h * 0.5), x1: Math.min(canvas.width, x1 + h), y1: Math.min(canvas.height, y1 + h * 0.5)}, h});
+      });
+    }
+    await Promise.all(jobs.map(async j => {
+      const f = Math.min(3, Math.max(1, 40 / j.h)), r = j.rect, W = r.x1 - r.x0, H = r.y1 - r.y0;
+      const c = document.createElement('canvas'); c.width = Math.round(W * f); c.height = Math.round(H * f);
+      const g = c.getContext('2d'); g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+      g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(canvas, r.x0, r.y0, W, H, 0, 0, c.width, c.height);
+      const back = x => ({text: x.text, confidence: x.confidence, bbox: {x0: r.x0 + x.bbox.x0 / f, x1: r.x0 + x.bbox.x1 / f}});
+      const words = d => (d.blocks || []).flatMap(b => b.paragraphs.flatMap(p => p.lines.flatMap(l => l.words))).map(back);
+      const reads = await Promise.all(['both', 'heb', 'eng1'].map(k => withWorker(k, s => s.w.recognize(c, {}, {blocks: true})).then(x => words(x.data))));
+      const bb = j.w.bbox, wid = bb.x1 - bb.x0, ov = x => Math.max(0, Math.min(x.bbox.x1, bb.x1) - Math.max(x.bbox.x0, bb.x0));
+      // the reading of the same spot: one word covering most of it, and not spilling far beyond it
+      let best = null;
+      for (const ws of reads) for (const x of ws){
+        if (ov(x) < 0.7 * wid || ov(x) < 0.7 * (x.bbox.x1 - x.bbox.x0)) continue;
+        if (!best || x.confidence > best.confidence) best = x;
+      }
+      j.best = best;
+    }));
+    for (const j of jobs){
+      const x = j.best, w = j.w;
+      if (!x || x.confidence < 85 || x.confidence < w.confidence + 15) continue;
+      const t = x.text.trim(), wasLatin = isLatin(w.text), nowLatin = isLatin(t);
+      if (!t || (!wasLatin && nowLatin)) continue;   // Hebrew turning into English: too risky to place
+      // a single letter swapped for a look-alike (final ם for ס, ג for נ) is a coin toss; only a very doubtful word is changed
+      const o = w.text.trim();
+      if (o.length === t.length && [...o].filter((ch, k) => ch !== t[k]).length === 1 && w.confidence >= 50) continue;
+      if (/ם[.,:;)]*$/.test(o) && o.replace(/ם([.,:;)]*)$/, 'ס$1') === t) continue;   // OCR's usual final ם → ס slip
+      const ws = j.l.words, i = ws.indexOf(w); if (i < 0) continue;
+      ws[i] = Object.assign({}, w, {text: t, confidence: x.confidence});
+      if (wasLatin && !nowLatin) moveOutOfLatin(ws, i);
+    }
+  }
   // lines in reading order with their vertical position; a gap clearly larger than usual between lines is an empty line
   function geoLines(data){
     const lines = data.blocks.flatMap(b => b.paragraphs.flatMap(p => p.lines)).filter(l => l.words.length)
@@ -1684,6 +1731,7 @@ window.BidiOCR = (function(){
     const best = readings.slice().sort((x, y) => y.conf - x.conf)[0];
     const hebData = withHebOnly ? (await Promise.all(heb))[best.k].data : null;
     await fixMixed(best.canvas, best.data, hebData);
+    if (!window.__noSecondLook) await secondLook(best.canvas, best.data);
     const res = {text: toText(best.data), paras: toParas(best.data), hebParas: hebData ? toParas(hebData) : null, alts: readings.map(r => r.text), canvas: best.canvas};
     return res;
   }
