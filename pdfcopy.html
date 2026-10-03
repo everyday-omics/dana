@@ -949,7 +949,7 @@
       for (let i = A.length - 1; i > 0; i--) if (/^[.,:;]$/.test(A[i].t) && A[i-1].t && !/[.,:;]$/.test(A[i-1].t)){ A[i-1].t += A[i].t; A.splice(i, 1); }
       // in a stretch of several English words the mark belongs after the last one (",acute onset CIDP" is "acute onset CIDP,")
       for (let i = 0; i < A.length; i++){
-        const mt = A[i].t.match(/^([.,:;]+)([A-Za-z][^\s]*?)$/); if (!mt) continue;
+        const mt = A[i].t.match(/^([.,:;]+)([(\["]?[A-Za-z][^\s]*?)$/); if (!mt) continue;
         let j = i; while (j + 1 < A.length && /[A-Za-z0-9]/.test(A[j+1].t) && !HEB.test(A[j+1].t) && !/^[.,:;]/.test(A[j+1].t)) j++;
         A[i].t = mt[2];
         if (!/[.,:;]$/.test(A[j].t)) A[j].t += mt[1];
@@ -1596,9 +1596,21 @@ window.BidiOCR = (function(){
         const cut = (x0, x1) => { const pad = Math.round(h * 0.3), c = document.createElement('canvas'); c.width = x1 - x0 + 2 * pad; c.height = hh;
           const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(canvas, x0, top, x1 - x0, hh, pad, 0, x1 - x0, hh); return c; };
         // first the whole word with English only: a real English word misread ("68ט80," for "acute,") is just replaced
-        const whole = await withWorker('eng', s => s.w.recognize(cut(bb.x0, bb.x1)));
-        const wt = whole.data.text.trim(), wc = whole.data.confidence;
-        const wholeOk = /^[(,.;:]?[A-Za-z][A-Za-z\-]{2,}[.,:;)]?$/.test(wt);
+        // (the single-line mode sometimes gives a cut-out word no confidence at all; the regular mode gives one per word)
+        const whole = await withWorker('eng1', s => s.w.recognize(cut(bb.x0, bb.x1), {}, {blocks: true}));
+        const wws = (whole.data.blocks || []).flatMap(b => b.paragraphs.flatMap(p => p.lines.flatMap(l => l.words)));
+        let wt = whole.data.text.trim().replace(/\s+/g, ' '), wc = wws.length ? Math.min(...wws.map(x => x.confidence)) : 0;
+        // Tesseract is rarely sure of a long English word cut out on its own ("(phacomatoses)" at 37); for a garbled word,
+        // two readings in different modes that agree letter for letter are taken as sure enough
+        const garbled0 = /\d/.test(t) && /[א-ת]/.test(t) && t.replace(/[^\dא-ת]/g, '').length >= 6;
+        if (garbled0 && wc < 80 && /[A-Za-z]{4}/.test(wt)){
+          const line = await withWorker('eng', s => s.w.recognize(cut(bb.x0, bb.x1)));
+          const letters = x => x.replace(/[^A-Za-z]/g, '');
+          if (letters(line.data.text) === letters(wt)) wc = 80;
+        }
+        const wholeOk = /^[(,.;:"]{0,2}[A-Za-z][A-Za-z\-]{2,}[.,:;)"]{0,2}$/.test(wt);
+        // Hebrew letters mixed with digits ("(810565וח860חק)") is never a word: a little less certainty is enough
+        const garbled = /\d/.test(t) && /[א-ת]/.test(t) && t.replace(/[^\dא-ת]/g, '').length >= 6;
         let best = null;
         for (let k = 2; k <= syms.length - 2; k++){
           const mid = Math.round((syms[k-1].bbox.x1 + syms[k].bbox.x0) / 2);
@@ -1611,7 +1623,7 @@ window.BidiOCR = (function(){
           const score = Math.min(er.data.confidence, hr.data.confidence);
           if (!best || score > best.score) best = {score, et, ht, ex, hx, ec: er.data.confidence, hc: hr.data.confidence};
         }
-        if (wholeOk && wc >= 80 && (!best || wc >= best.score)){
+        if (wholeOk && wc >= (garbled ? 70 : 80) && (!best || wc >= best.score)){
           if (isLatin(t)){ ws[i] = Object.assign({}, w, {symbols: [], text: wt, confidence: wc}); changed = true; continue; }
           // it was taken as Hebrew: it joins the English stretch beside it, in its place left to right
           const nw = Object.assign({}, w, {symbols: [], text: wt, confidence: wc});
