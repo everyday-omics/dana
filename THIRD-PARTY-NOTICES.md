@@ -1,10 +1,11 @@
 # Third-party components
 
-`pdfcopy.html` embeds the following components. They are **not** covered by this project's CC BY-NC 4.0 license; each remains under its own license, the Apache License 2.0 (full text below), which permits any use, including commercial use, of those components.
+`pdfcopy.html` embeds the following components. They are **not** covered by this project's CC BY-NC 4.0 license; each remains under its own license, which permits any use, including commercial use, of that component: the Apache License 2.0 (full text below) or, for ONNX Runtime Web, the MIT License (full text at the end).
 
 - **Tesseract.js** (JavaScript library, worker and WebAssembly core), Copyright the Tesseract.js authors — https://github.com/naptha/tesseract.js
 - **Tesseract OCR** engine and the `heb` / `eng` `best_int` language models (tessdata_best), Copyright Google and the Tesseract authors — https://github.com/tesseract-ocr/tesseract
 - **pdf.js** (legacy build and worker), Copyright Mozilla Foundation — https://github.com/mozilla/pdf.js
+- **Hebrew PaddleOCR word recognizer** (mobile-word model and charset), by Rivok, a derivative of PaddleOCR — https://huggingface.co/Rivok/paddleocr-hebrew (Apache License 2.0)
 
 ---
 
@@ -211,4 +212,15 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+```
+
+
+---
+
+## ONNX Runtime Web — MIT License
+
+ONNX Runtime Web (wasm build), Copyright Microsoft Corporation — https://github.com/microsoft/onnxruntime
+
+```
+
 ```
