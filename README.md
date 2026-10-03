@@ -17,7 +17,7 @@ Everything runs inside the browser on your computer. Nothing is uploaded or save
 
 - [Tesseract.js](https://github.com/naptha/tesseract.js) with the Hebrew and English `best_int` models, embedded in the file (Apache License 2.0)
 - [pdf.js](https://github.com/mozilla/pdf.js) by Mozilla, embedded in the file (Apache License 2.0)
-- The Hebrew PaddleOCR word recognizer by Rivok ([Rivok/paddleocr-hebrew](https://huggingface.co/Rivok/paddleocr-hebrew), mobile-word model), a second reader for English and doubtful words, embedded in the file (Apache License 2.0)
+- The Hebrew PaddleOCR word recognizer by Rivok ([Rivok/paddleocr-hebrew](https://huggingface.co/Rivok/paddleocr-hebrew), mobile-word model, fine-tuned for Hebrew and English written together), a second reader, embedded in the file (Apache License 2.0)
 - [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) by Microsoft, which runs that model in the browser, embedded in the file (MIT License)
 
 ## License
