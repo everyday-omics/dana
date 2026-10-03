@@ -1759,41 +1759,50 @@ window.BidiOCR = (function(){
   // English block ("MRI 21.06.2020", "eosinophils 8%"). It is taken to come first only before a unit ("36.6 mmol/L").
   const isNum = t => /^[(\[]?[\d][\d.,:\/\-%]*[)\].,:;]*$/.test(t);
   const isUnit = t => /^(mg|g|kg|mcg|µg|ug|ng|ml|mL|l|L|dl|dL|cc|cm|mm|mmol|mEq|IU|U|units?|mg\/kg(\/d(ay)?)?|mg\/dL|g\/dL|mmol\/L|mEq\/L|mg\/m2|kg\/m2|mmHg|bpm|kcal|h|hr|hrs|min|sec|%|[a-zµ]+\/[A-Za-z]+)[.,:;)]*$/.test(t);   // any "x/y" in small letters (eos/hpf) too
-  function orderLatinRuns(data, hebData){
+  // Each Hebrew line is laid out again from the words' places on screen, the way screens lay out such text: right to left,
+  // with each English stretch left to right (its numbers settled below). Tesseract's own order breaks now and then: a line
+  // starting with English read in pieces put left to right, an English word at the line's right end listed last.
+  // A word counts as English when it is English letters and numbers (a glued Hebrew prefix letter allowed, "לcauda"),
+  // and not where the Hebrew-only reading is sure of a Hebrew word ("DX" where it reads "אם").
+  function layoutLines(data, hebData){
     const hebWords = hebData ? hebData.blocks.flatMap(b => b.paragraphs.flatMap(p => p.lines.flatMap(l => l.words))) : [];
     const overlap = (a, b) => Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
-    // a word the Hebrew-only reading is sure is Hebrew ("NIWA" where it reads "בשנת"), fixed later from that reading
     const hebrewThere = w => hebWords.some(x => x.confidence >= 85 && /^[א-ת"'\-]{2,}[.,:;]?$/.test(x.text) && overlap(x.bbox, w.bbox) > 0.6 * (w.bbox.x1 - w.bbox.x0)
       && Math.abs((x.bbox.y0 + x.bbox.y1) - (w.bbox.y0 + w.bbox.y1)) < (w.bbox.y1 - w.bbox.y0));
+    const tx = w => w.text.replace(/[‎‏]/g, '');
+    const english = w => { const t = tx(w); return (isLatin(t) || /^[(]?[ובלהמכש]-?[A-Za-z][A-Za-z0-9\/.\-]*[.,:;)]*$/.test(t)) && !hebrewThere(w); };
     for (const b of data.blocks) for (const p of b.paragraphs) for (const l of p.lines){
       if (!l.words.some(w => /[א-ת]/.test(w.text))) continue;
-      const ws = l.words;
-      for (let i = 0; i < ws.length;){
-        const tx = w => w.text.replace(/[‎‏]/g, '');
-        if (!isLatin(tx(ws[i]))){ i++; continue; }
-        let j = i; while (j < ws.length && isLatin(tx(ws[j]))) j++;
-        const run = ws.slice(i, j);
-        // only a stretch read surely: a Hebrew word misread as English ("om" for "מים") must not be pulled in
-        // ("2-1" may be "ו-2", a prefix read as a digit)
-        if (run.length > 1 && run.every(w => w.confidence >= 75 && !hebrewThere(w) && !/^\d+-[1lI|]$/.test(tx(w)))){
-          const vis = run.slice().sort((p, q) => p.bbox.x0 - q.bbox.x0);   // left to right on screen
-          let k = vis.length; while (k > 0 && isNum(tx(vis[k-1]))) k--;
-          if (k === vis.length || k === 0 || !isUnit(tx(vis[0]))) k = vis.length;   // the numbers end the English block
-          const nums = vis.slice(k).reverse(), block = vis.slice(0, k);
-          // a comma or full stop on screen left of the block's first letters follows the whole block ("..., mmol/L,")
-          const f = block[0], fs = (f && f.symbols || []).slice().sort((p, q) => p.bbox.x0 - q.bbox.x0);
-          const firstLetter = fs.find(y => /[A-Za-z0-9]/.test(y.text));
-          const markSym = firstLetter && fs.find(y => /^[.,]$/.test(y.text) && y.bbox.x1 <= firstLetter.bbox.x0 + 1);
-          const lastW = block[block.length - 1];
-          if (markSym && block.length > 1 && !/[.,:;]$/.test(tx(lastW))){
-            block[0] = Object.assign({}, f, {text: tx(f).replace(/[.,]/, '')});
-            block[block.length - 1] = Object.assign({}, lastW, {text: tx(lastW) + markSym.text});
-          }
-          ws.splice(i, run.length, ...nums, ...block);
-        }
-        i = j;
+      const v = l.words.slice().sort((p, q) => (q.bbox.x0 + q.bbox.x1) - (p.bbox.x0 + p.bbox.x1)), out = [];
+      for (let i = 0; i < v.length;){
+        if (!english(v[i])){ out.push(v[i++]); continue; }
+        let j = i; while (j < v.length && english(v[j])) j++;
+        // the word left of the stretch on screen comes right after it in v
+        const left = v[j], leftSure = !!left && /[א-ת]/.test(left.text) && left.confidence >= 75;
+        out.push(...orderStretch(v.slice(i, j).reverse(), leftSure)); i = j;
       }
+      l.words = out;
     }
+  }
+  // vis: a stretch's words left to right on screen; leftSure: the word left of the stretch is Hebrew read surely
+  function orderStretch(vis, leftSure){
+    const tx = w => w.text.replace(/[‎‏]/g, '');
+    let k = vis.length; while (k > 0 && isNum(tx(vis[k-1]))) k--;
+    if (k === vis.length || k === 0 || !isUnit(tx(vis[0]))) k = vis.length;   // the numbers end the English block
+    // a prefix read as a digit on the block's left ("2-1" for "ו-2") comes after it, when the word left of it is surely
+    // Hebrew; other numbers there keep their place (they may be an English word misread, "01" for "CT")
+    let s0 = 0; if (leftSure) while (s0 < k - 1 && /^\d+-[1lI|]$/.test(tx(vis[s0]))) s0++;
+    const nums = vis.slice(k).reverse(), block = vis.slice(s0, k).concat(vis.slice(0, s0).reverse());
+    // a comma or full stop on screen left of the block's first letters follows the whole block ("..., mmol/L,")
+    const f = block[0], fs = (f && f.symbols || []).slice().sort((p, q) => p.bbox.x0 - q.bbox.x0);
+    const firstLetter = fs.find(y => /[A-Za-z0-9]/.test(y.text));
+    const markSym = firstLetter && fs.find(y => /^[.,]$/.test(y.text) && y.bbox.x1 <= firstLetter.bbox.x0 + 1);
+    const lastW = block[block.length - 1];
+    if (markSym && block.length > 1 && !/[.,:;]$/.test(tx(lastW))){
+      block[0] = Object.assign({}, f, {text: tx(f).replace(/[.,]/, '')});
+      block[block.length - 1] = Object.assign({}, lastW, {text: tx(lastW) + markSym.text});
+    }
+    return nums.concat(block);
   }
   // A slower second look at the doubtful words: each one is cut out with a word on each side, enlarged, and read again
   // three ways (Hebrew and English together, Hebrew only, English only). A new reading replaces the word only when it is
@@ -1899,7 +1908,7 @@ window.BidiOCR = (function(){
     await fixMixed(best.canvas, best.data, hebData);
     await fixPrefixes(best.canvas, best.data);
     await fixAcronyms(best.canvas, best.data, hebData);
-    orderLatinRuns(best.data, hebData);
+    layoutLines(best.data, hebData);
     if (!window.__noSecondLook) await secondLook(best.canvas, best.data);
     const res = {text: toText(best.data), paras: toParas(best.data), hebParas: hebData ? toParas(hebData) : null, alts: readings.map(r => r.text), canvas: best.canvas};
     return res;
