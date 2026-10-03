@@ -945,6 +945,8 @@
         if (A[1]) A[1].t = A[1].t.replace(/^[\\/|]+/, '');
       }
       // a Hebrew sentence ending in an English word: OCR puts the full stop in front of it (".mg/dL" for "mg/dL.")
+      // a comma or full stop read as a word of its own belongs to the word before it ("CIDP ," is "CIDP,")
+      for (let i = A.length - 1; i > 0; i--) if (/^[.,:;]$/.test(A[i].t) && A[i-1].t && !/[.,:;]$/.test(A[i-1].t)){ A[i-1].t += A[i].t; A.splice(i, 1); }
       // in a stretch of several English words the mark belongs after the last one (",acute onset CIDP" is "acute onset CIDP,")
       for (let i = 0; i < A.length; i++){
         const mt = A[i].t.match(/^([.,:;]+)([A-Za-z][^\s]*?)$/); if (!mt) continue;
@@ -1582,45 +1584,56 @@ window.BidiOCR = (function(){
           if (hw){ ws[i] = Object.assign({}, w, {text: hw.text, confidence: hw.confidence}); moveOutOfLatin(ws, i); changed = true; }
           continue;
         }
-        // a garbled word that mixes Hebrew letters with digits or sits next to English: Hebrew and English glued together?
+        // a garbled word (Hebrew mixed with digits, or English letters run into nonsense) next to English or with digits:
+        // Hebrew and English written with no space between them? Each split point between its letters is tried: one
+        // side read with English only, the other with Hebrew only; the split where both readings are surest wins.
         const nextToLatin = (ws[i-1] && isLatin(ws[i-1].text)) || (ws[i+1] && isLatin(ws[i+1].text));
-        if (w.confidence >= 60 || !/[א-ת]/.test(t) || t.length < 5 || !(nextToLatin || /\d/.test(t))) continue;
-        const pad = Math.round(h * 0.35);
-        const rect = {left: Math.max(0, bb.x0 - pad), top: Math.max(0, bb.y0 - pad), width: (bb.x1 - bb.x0) + 2*pad, height: h + 2*pad};
-        // the word is cut out first: reading an area of the whole image gives no per-word confidence
-        const crop = document.createElement('canvas'); crop.width = rect.width; crop.height = rect.height;
-        crop.getContext('2d').drawImage(canvas, rect.left, rect.top, rect.width, rect.height, 0, 0, rect.width, rect.height);
-        const e = await withWorker('eng', slot => slot.w.recognize(crop, {}, {blocks: true}));
-        const ew = (e.data.blocks || []).flatMap(b => b.paragraphs.flatMap(p => p.lines.flatMap(l => l.words)))
-          .map(x => ({text: x.text, confidence: x.confidence, bbox: {x0: x.bbox.x0 + rect.left, x1: x.bbox.x1 + rect.left}}));
-        // the English part: a plain English word at the end of the box that faces the English next to it
-        // (a single-line reading gives no per-word confidence, so the Hebrew part's reading below is the check)
+        const syms = (w.symbols || []).slice().sort((p, q) => p.bbox.x0 - q.bbox.x0);
+        if (w.confidence >= 70 || t.length < 5 || syms.length < 5 || !(nextToLatin || /\d/.test(t))) continue;
         const engSideLeft = ws[i+1] && isLatin(ws[i+1].text) ? (ws[i+1].bbox.x0 < bb.x0) : ws[i-1] && isLatin(ws[i-1].text) ? (ws[i-1].bbox.x0 < bb.x0) : true;
-        const end = ew.length ? (engSideLeft ? ew[0] : ew[ew.length - 1]) : null;
-        const good = end && /^[A-Za-z]{4,}[.,:;]?$/.test(end.text) ? [end] : [];
-        if (!good.length) continue;
-        // the English part sits at one end of the word; the rest of the word is the Hebrew part
-        const ex0 = Math.min(...good.map(x => x.bbox.x0)), ex1 = Math.max(...good.map(x => x.bbox.x1));
-        const atLeft = (ex0 + ex1) / 2 < (bb.x0 + bb.x1) / 2;
-        if (atLeft !== engSideLeft) continue;
-        const hx0 = atLeft ? ex1 : bb.x0, hx1 = atLeft ? bb.x1 : ex0;
-        if (hx1 - hx0 < h * 0.8) continue;
-        // glued letters touch, so the boundary is not exact: try it a little into the English part too, keep the surer reading
-        let hr = null;
-        for (const into of [2, Math.round(h * 0.3)]){
-          const r0 = atLeft ? {left: hx0 - into, top: rect.top, width: hx1 - hx0 + into + 2, height: rect.height} : {left: hx0 - 2, top: rect.top, width: hx1 - hx0 + into + 2, height: rect.height};
-          const r = await withWorker('hebw', slot => slot.w.recognize(canvas, {rectangle: r0}));
-          if (!hr || r.data.confidence > hr.data.confidence) hr = r;
+        const top = Math.max(0, bb.y0 - Math.round(h * 0.35)), hh = h + 2 * Math.round(h * 0.35);
+        const cut = (x0, x1) => { const pad = Math.round(h * 0.3), c = document.createElement('canvas'); c.width = x1 - x0 + 2 * pad; c.height = hh;
+          const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(canvas, x0, top, x1 - x0, hh, pad, 0, x1 - x0, hh); return c; };
+        // first the whole word with English only: a real English word misread ("68ט80," for "acute,") is just replaced
+        const whole = await withWorker('eng', s => s.w.recognize(cut(bb.x0, bb.x1)));
+        const wt = whole.data.text.trim(), wc = whole.data.confidence;
+        const wholeOk = /^[(,.;:]?[A-Za-z][A-Za-z\-]{2,}[.,:;)]?$/.test(wt);
+        let best = null;
+        for (let k = 2; k <= syms.length - 2; k++){
+          const mid = Math.round((syms[k-1].bbox.x1 + syms[k].bbox.x0) / 2);
+          const L = [bb.x0, mid], R = [mid, bb.x1];
+          const [ex, hx] = engSideLeft ? [L, R] : [R, L];
+          if (ex[1] - ex[0] < h * 1.2 || hx[1] - hx[0] < h * 0.8) continue;
+          const [er, hr] = await Promise.all([withWorker('eng', s => s.w.recognize(cut(...ex))), withWorker('hebw', s => s.w.recognize(cut(...hx)))]);
+          const et = er.data.text.trim(), ht = hr.data.text.trim();
+          if (!/^[A-Za-z]{3,}[.,:;]?$/.test(et) || !hebOnlyWord(ht)) continue;
+          const score = Math.min(er.data.confidence, hr.data.confidence);
+          if (!best || score > best.score) best = {score, et, ht, ex, hx, ec: er.data.confidence, hc: hr.data.confidence};
         }
-        let ht = hr.data.text.trim();
-        if (hr.data.confidence < 80 || !hebOnlyWord(ht)) continue;
-        // the whole-word reading saw the touching letter in context ("כאשר" where the cut-out reads "כאשו"): when its letters
-        // at that end differ by one letter only, they are kept
-        const core = ht.replace(/[^\u05D0-\u05EA]/g, ''), letters = t.replace(/[^\u05D0-\u05EA]/g, '');
+        if (wholeOk && wc >= 80 && (!best || wc >= best.score)){
+          if (isLatin(t)){ ws[i] = Object.assign({}, w, {text: wt, confidence: wc}); changed = true; continue; }
+          // it was taken as Hebrew: it joins the English stretch beside it, in its place left to right
+          const nw = Object.assign({}, w, {text: wt, confidence: wc});
+          ws.splice(i, 1);
+          if (ws[i] && isLatin(ws[i].text)) insertLatin(ws, i, nw, true);
+          else if (ws[i-1] && isLatin(ws[i-1].text)) insertLatin(ws, i, nw, false);
+          else ws.splice(i, 0, nw);
+          changed = true; continue;
+        }
+        if (!best || best.ec < 80 || best.hc < 80) continue;
+        if (wholeOk && wc >= best.score) continue;   // the word reads better whole: leave it
+        const atLeft = engSideLeft;
+        let ht = best.ht;
+        // the whole-word reading saw the letters in context: when its letters at the Hebrew end differ by one only, keep them
+        const core = ht.replace(/[^א-ת]/g, ''), letters = t.replace(/[^א-ת]/g, '');
         const same = atLeft ? letters.slice(0, core.length) : letters.slice(-core.length);
         if (same.length === core.length && same !== core && [...core].filter((c, k) => c !== same[k]).length === 1) ht = ht.replace(core, same);
-        const hebPart = Object.assign({}, w, {text: ht, confidence: hr.data.confidence, bbox: {x0: hx0, x1: hx1, y0: bb.y0, y1: bb.y1}});
-        const engParts = good.map(x => Object.assign({}, w, {text: x.text, confidence: x.confidence, bbox: {x0: x.bbox.x0, x1: x.bbox.x1, y0: bb.y0, y1: bb.y1}}));
+        const hebPart = Object.assign({}, w, {text: ht, confidence: best.hc, bbox: {x0: best.hx[0], x1: best.hx[1], y0: bb.y0, y1: bb.y1}});
+        const engParts = [Object.assign({}, w, {text: best.et, confidence: best.ec, bbox: {x0: best.ex[0], x1: best.ex[1], y0: bb.y0, y1: bb.y1}})];
+        if (isLatin(t)){
+          // the word was taken as English, inside the English stretch: the English part stays, the Hebrew part moves out
+          ws.splice(i, 1, engParts[0], hebPart); moveOutOfLatin(ws, i + 1); i++; changed = true; continue;
+        }
         // English on the left of the Hebrew part comes after it in reading order, on the right before it
         ws.splice(i, 1, hebPart);
         for (const ep of engParts){ if (atLeft) insertLatin(ws, i + 1, ep, true); else { insertLatin(ws, i, ep, false); i++; } }
