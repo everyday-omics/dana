@@ -11,7 +11,7 @@ The corrected text is shown right to left and can be edited and copied. Words th
 
 ## Privacy
 
-Everything runs inside the browser on your computer. Nothing is uploaded or saved, no network access is needed, and no language models (LLMs) are used. The file works offline once downloaded.
+Everything runs inside the browser on your computer. No text, screenshots or PDFs are uploaded or saved, and no language models (LLMs) are used. The only network request is an anonymous usage counter (GoatCounter: a visit or a use is counted, never any content); the page's security policy blocks every other request. The file works offline once downloaded.
 
 ## Built with
 
