@@ -5,7 +5,7 @@ Fixes scrambled Hebrew and English text copied from PDF files, such as clinical 
 Open `pdfcopy.html` in a browser (Edge or Chrome), then either:
 
 - **Paste a screenshot** of the paragraph (Win+Shift+S, then Ctrl+V). The text is read with built-in optical character recognition.
-- **Load or drag the PDF file**, then mark the area you want. The text is read directly from the file, so this is the most accurate option.
+- **Load or drag the PDF file**, then mark the area you want. The text is read directly from the file, so this is the most accurate option. In a scanned PDF (no text inside the file), the marked area is read from the page image, like a screenshot.
 
 The corrected text is shown right to left and can be edited and copied. Words the tool is unsure of are shown in red.
 
